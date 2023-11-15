@@ -4,61 +4,224 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
-#define PORT 8080
+#define DATA_BUFFER 4096
+
 int main(int argc, char const* argv[])
 {
-    int server_fd, new_socket;
+    int new_socket;
     ssize_t valread;
-    struct sockaddr_in address;
-    int opt = 1;
+    // struct sockaddr_in address;
+    // int opt = 1;
     socklen_t addrlen = sizeof(address);
     char buffer[1024] = { 0 };
     char* hello = "Hello from server";
- 
-    // Creating socket file descriptor
-    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        perror("socket failed");
+
+    int create_tcp_server_socket() {
+    const int opt = 1;
+
+    /* Step1: create a TCP socket */
+    int fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (fd == -1) {
+        perror("Could not create socket");
         exit(EXIT_FAILURE);
     }
+
+    printf("Created a socket with fd: %d\n", fd);
+
+    /* Step2: set socket options */
+    if(setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, 
+          (char *)&opt, sizeof(opt)) == -1) { 
+ 
+        perror("Could not set socket options");
+        close_socket(fd);
+        exit(EXIT_FAILURE);
+    } 
+
+    /* Initialize the socket address structure */
+    /* Listen on port 5001 */
+    struct sockaddr_in saddr;
+
+    saddr.sin_family = AF_INET;         
+    saddr.sin_port = htons(5001);     
+    saddr.sin_addr.s_addr = INADDR_ANY; 
+
+    /* Step3: bind the socket to port 5001 */
+    if (bind(fd, (struct sockaddr *)&saddr, 
+            sizeof(struct sockaddr_in)) == -1) {
+
+        perror("Could not bind to socket");
+        close_socket(fd);
+        exit(EXIT_FAILURE);
+    }
+
+    /* Step4: listen for incoming connections */
+    /* 
+       The socket will allow a maximum of 1000 clients to be queued before 
+       refusing connection requests.
+    */
+    if (listen(fd, 1000) == -1) {
+        perror("Could not listen on socket");
+        close_socket(fd);
+        exit(EXIT_FAILURE);
+    }
+
+    return fd;
+}
+
+/* Get the socket server fd */
+int server_fd = create_tcp_server_socket(); 
+
+/* Make the socket non blocking, will not wait for connection 
+    indefinitely */ 
+fcntl(server_fd, F_SETFL, O_NONBLOCK);
+
+if (server_fd == -1) {
+    perror ("Could not create socket");
+    exit(EXIT_FAILURE);
+}
+
+struct epoll_event ev, events[MAX_EVENTS];
+
+/* Create epoll instance */
+int efd = epoll_create1 (0);
+
+if (efd == -1) {
+    perror ("epoll_create");
+    exit(EXIT_FAILURE);
+}
+
+ev.data.fd = server_fd;
+
+/* Interested in read's events using edge triggered mode */
+ev.events = EPOLLIN | EPOLLET;
+
+/* Allow epoll to monitor the server_fd socket */
+if (epoll_ctl (efd, EPOLL_CTL_ADD, server_fd, &ev) == -1) {
+    perror ("epoll_ctl");
+    exit(EXIT_FAILURE);
+}
  
     // Forcefully attaching socket to the port 8080
-    if (setsockopt(server_fd, SOL_SOCKET,
-                   SO_REUSEADDR | SO_REUSEPORT, &opt,
-                   sizeof(opt))) {
-        perror("setsockopt");
+    // if (setsockopt(server_fd, SOL_SOCKET,
+    //                SO_REUSEADDR | SO_REUSEPORT, &opt,
+    //                sizeof(opt))) {
+    //     perror("setsockopt");
+    //     exit(EXIT_FAILURE);
+    // }
+
+    while (1) {
+    /* Returns only sockets for which there are events */
+    int nfds = epoll_wait(efd, events, MAX_EVENTS, -1);
+
+    if (nfds == -1) {
+        perror("epoll_wait");
         exit(EXIT_FAILURE);
     }
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY;
-    address.sin_port = htons(PORT);
- 
-    // Forcefully attaching socket to the port 8080
-    if (bind(server_fd, (struct sockaddr*)&address,
-             sizeof(address))
-        < 0) {
-        perror("bind failed");
-        exit(EXIT_FAILURE);
+
+    /* Iterate over sockets only having events */
+    for (int i = 0; i < nfds; i++) {
+        int fd = events[i].data.fd;
+        
+        if (fd == server_fd) {
+            /* New connection request received */
+            accept_new_connection_request(fd);
+        }
+        
+        else if ((events[i].events & EPOLLERR) || 
+                        (events[i].events & EPOLLHUP) || 
+                        (!(events[i].events & EPOLLIN))) {
+
+            /* Client connection closed */
+            close(fd);
+        }
+        
+        else {
+            /* Received data on an existing client socket */
+            recv_and_forward_message(fd);
+        }
     }
-    if (listen(server_fd, 3) < 0) {
-        perror("listen");
-        exit(EXIT_FAILURE);
+}
+
+void accept_new_connection_request(int fd) {
+    struct sockaddr_in new_addr;
+    int addrlen = sizeof(struct sockaddr_in);
+
+    while (1) {
+        /* Accept new connections */
+        int conn_sock = accept(server_fd, (struct sockaddr*)&new_addr, 
+                          (socklen_t*)&addrlen);
+        
+        if (conn_sock == -1) {
+            /* We have processed all incoming connections. */
+            if ((errno == EAGAIN) || (errno == EWOULDBLOCK)) {
+                break;
+            }
+            else {
+                perror ("accept");
+                break;
+            }
+        }
+
+        /* Make the new connection non blocking */
+        fcntl(conn_sock, F_SETFL, O_NONBLOCK);
+
+        /* Monitor new connection for read events in edge triggered mode */
+        ev.events = EPOLLIN | EPOLLET;
+        ev.data.fd = conn_sock;
+
+        /* Allow epoll to monitor new connection */
+        if (epoll_ctl(efd, EPOLL_CTL_ADD, conn_sock, &ev) == -1) {
+            perror("epoll_ctl: conn_sock");
+            break;
+        }
     }
-    if ((new_socket
-         = accept(server_fd, (struct sockaddr*)&address,
-                  &addrlen))
-        < 0) {
-        perror("accept");
-        exit(EXIT_FAILURE);
+}
+
+void recv_and_forward_message(int fd) {
+    std::string remainder = "";
+
+    while (1) {
+        char buf[DATA_BUFFER];
+        int ret_data = recv(fd, buf, DATA_BUFFER, 0);
+
+        if (ret_data > 0) {
+            /* Read ret_data number of bytes from buf */
+            std::string msg(buf, buf + ret_data);
+            msg = remainder + msg;
+
+            /* Parse and split incoming bytes into individual messages */
+            std::vector<std::string> parts = split(msg, "<EOM>");
+            remainder = msg;
+
+            for(int i=0; i<parts.length(); i++){
+                printf(" %s\n", parts[i]);
+            }
+
+            // forward_message(parts);
+            // putsf("the message: %s", parts);
+        } 
+        else {
+            /* Stopped sending new data */
+            break;
+        }
     }
-    valread = read(new_socket, buffer,
-                   1024 - 1); // subtract 1 for the null
-                              // terminator at the end
-    printf("%s\n", buffer);
-    send(new_socket, hello, strlen(hello), 0);
-    printf("Hello message sent\n");
+}
+
+std::vector<std::string> split(std::string &s, std::string delimiter) {
+    size_t pos = 0;
+    std::vector<std::string> parts;
+
+    while ((pos = s.find(delimiter)) != std::string::npos) {
+        std::string token = s.substr(0, pos);
+        if (token.size() > 0) parts.push_back(token);
+        s.erase(0, pos + delimiter.length());
+    }
+    
+    return parts;
+}
  
     // closing the connected socket
-    close(new_socket);
+    close(conn_sock);
     // closing the listening socket
     close(server_fd);
     return 0;
