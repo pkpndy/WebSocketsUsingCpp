@@ -2,11 +2,30 @@
 // programming
 #include <arpa/inet.h>
 #include <stdio.h>
-#include <string.h>
+#include <vector>
+#include <string>
+#include <cstring>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <iostream>
+#include <thread>
+
 #define PORT 8080
 #define MAX_LIMIT 4096
+
+std::vector<std::string> splitMsg(std::string &s, std::string delimiter) {
+    size_t pos = 0;
+    std::vector<std::string> parts;
+
+    while ((pos = s.find(delimiter)) != std::string::npos) {
+        std::string token = s.substr(0, pos);
+        if (token.size() > 0) parts.push_back(token);
+        s.erase(0, pos + delimiter.length());
+    }
+
+    return parts;
+}
+
 
 void recv_messages(int server_fd) {
     int ret_data;
@@ -19,7 +38,7 @@ void recv_messages(int server_fd) {
         if (ret_data > 0) {
             std::string msg(buf, buf+ret_data);
             msg = remainder + msg;
-            std::vector<std::string> parts = split(msg, "<EOM>");
+            std::vector<std::string> parts = splitMsg(msg, "<EOM>");
             remainder = msg;
 
             for (int i = 0; i < parts.size(); i++) {
@@ -30,19 +49,6 @@ void recv_messages(int server_fd) {
             remainder = "";
         }
     }
-}
-
-std::vector<std::string> split(std::string &s, std::string delimiter) {
-    size_t pos = 0;
-    std::vector<std::string> parts;
-
-    while ((pos = s.find(delimiter)) != std::string::npos) {
-        std::string token = s.substr(0, pos);
-        if (token.size() > 0) parts.push_back(token);
-        s.erase(0, pos + delimiter.length());
-    }
-    
-    return parts;
 }
 
 int main(int argc, char const* argv[])
@@ -77,7 +83,7 @@ int main(int argc, char const* argv[])
 	}
 	printf("The socket is now connected\n");
 
-	std::thread t(recv_messages, fd);
+	std::thread t(recv_messages, client_fd);
 
 	char msg[MAX_LIMIT];
 
