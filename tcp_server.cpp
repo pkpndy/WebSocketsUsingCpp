@@ -34,14 +34,14 @@ int create_tcp_server_socket() {
     }
 
     /* Initialize the socket address structure */
-    /* Listen on port 5001 */
+    /* Listen on port 8080 */
     struct sockaddr_in saddr;
 
     saddr.sin_family = AF_INET;
-    saddr.sin_port = htons(5001);
+    saddr.sin_port = htons(8080);
     saddr.sin_addr.s_addr = INADDR_ANY;
 
-    /* Step3: bind the socket to port 5001 */
+    /* Step3: bind the socket to port 8080 */
     if (bind(fd, (struct sockaddr *)&saddr, sizeof(struct sockaddr_in)) == -1) {
         perror("Could not bind to socket");
         close(fd);
@@ -121,16 +121,16 @@ void recv_and_forward_message(int fd) {
         if (ret_data > 0) {
             /* Read ret_data number of bytes from buf */
             std::string msg(buf, buf + ret_data);
-            msg = remainder + msg;
+            // msg = remainder + msg;
 
-            /* Parse and split incoming bytes into individual messages */
-            std::vector<std::string> parts = splitMsg(msg, "<EOM>");
-            remainder = msg;
+            // /* Parse and split incoming bytes into individual messages */
+            // std::vector<std::string> parts = splitMsg(msg, "<EOM>");
+            // remainder = msg;
 
-            for (size_t i = 0; i < parts.size(); i++) {
-                std::cout << parts[i] << std::endl;  // Print each part
-            }
-
+            // for (size_t i = 0; i < parts.size(); i++) {
+            //     std::cout << parts[i] << std::endl;  // Print each part
+            // }
+            std::cout << msg << std::endl;
         }
         else {
             /* Stopped sending new data */
