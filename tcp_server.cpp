@@ -1,6 +1,7 @@
 #include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sstream>
 #include <vector>
 #include <sys/epoll.h>
 #include <string>
@@ -8,6 +9,9 @@
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <openssl/sha.h>
+#include <openssl/bio.h>
+#include <openssl/evp.h>
 #include <iostream>
 
 #define DATA_BUFFER 4096
@@ -97,7 +101,6 @@ void accept_new_connection_request(int server_fd, int efd, struct epoll_event &e
     }
 }
 
-
 std::vector<std::string> splitMsg(std::string &s, std::string delimiter) {
     size_t pos = 0;
     std::vector<std::string> parts;
@@ -110,6 +113,67 @@ std::vector<std::string> splitMsg(std::string &s, std::string delimiter) {
 
     return parts;
 }
+
+std::string createSocketAccept(std::string id) {
+  const std::string WEBSOCKET_MAGIC_STRING_KEY = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"; // WebSocket magic string
+
+    std::string dataToHash = id + WEBSOCKET_MAGIC_STRING_KEY;
+
+    unsigned char sha1Hash[SHA_DIGEST_LENGTH];
+    SHA1(reinterpret_cast<const unsigned char*>(dataToHash.c_str()), dataToHash.size(), sha1Hash);
+
+    BIO* base64Bio = BIO_new(BIO_f_base64());
+    BIO* memBio = BIO_new(BIO_s_mem());
+    BIO_set_flags(base64Bio, BIO_FLAGS_BASE64_NO_NL);
+    BIO_push(base64Bio, memBio);
+    BIO_write(base64Bio, sha1Hash, sizeof(sha1Hash));
+    BIO_flush(base64Bio);
+
+    char* encodedBuffer = nullptr;
+    long length = BIO_get_mem_data(memBio, &encodedBuffer);
+
+    std::string base64Encoded(encodedBuffer, length);
+
+    BIO_free_all(base64Bio);
+
+    return base64Encoded;
+}
+
+std::string prepareHandShakeHeaders(std::string id) {
+  const std::string acceptKey = createSocketAccept(id);
+  std::stringstream response;
+    response << "HTTP/1.1 101 Switching Protocols\r\n";
+    response << "Upgrade: websocket\r\n";
+    response << "Connection: Upgrade\r\n";
+    response << "Sec-WebSocket-Accept: " << acceptKey << "\r\n";
+    response << "\r\n";
+    return response.str();
+}
+
+void onSocketUpgrade(const std::string& data, int socket) {
+    std::istringstream ss(data);
+    std::string line;
+    while (std::getline(ss, line, '\n')) {
+        if (line.substr(0, 7) == "Upgrade") {
+            // Assuming the key is on the 11th line
+            std::string webClientSocketKey = line.substr(line.find(':') + 1);
+            std::cout << webClientSocketKey << " connected!\n";
+
+            // Prepare handshake headers
+            std::string response = prepareHandShakeHeaders(webClientSocketKey);
+
+            // Convert string to const char* for send
+            const char* responseBuffer = response.c_str();
+
+            // Send the response
+            send(socket, responseBuffer, response.size(), 0);
+        }
+        else{
+            std::cerr << "Not WebSocket Request\n";
+        }
+    }
+}
+
 
 void recv_and_forward_message(int fd) {
     std::string remainder = "";
@@ -131,9 +195,11 @@ void recv_and_forward_message(int fd) {
             //     std::cout << parts[i] << std::endl;  // Print each part
             // }
             std::cout << msg << std::endl;
+            onSocketUpgrade(msg, fd);
         }
         else {
             /* Stopped sending new data */
+            std::cerr << "Empty or invalid data received\n";
             break;
         }
     }
@@ -143,6 +209,7 @@ int main(int argc, char const* argv[])
 {
     int conn_sock;
     ssize_t valread;
+    const std::string WEBSOCKET_MAGIC_STRING_KEY = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 /* Get the socket server fd */
 int server_fd = create_tcp_server_socket();
