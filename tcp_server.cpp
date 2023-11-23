@@ -5,8 +5,8 @@
 #include <vector>
 #include <sys/epoll.h>
 #include <string>
+#include <openssl/evp.h>
 #include <openssl/sha.h>
-#include "base64.h"
 #include <sys/socket.h>
 #include <unistd.h>
 #include <errno.h>
@@ -17,6 +17,33 @@
 
 #define DATA_BUFFER 4096
 #define MAX_EVENTS 10000
+
+auto start = std::chrono::high_resolution_clock::now();
+
+
+char *base64_encode(const unsigned char *input, int length)
+{
+    const auto pl = 4 * ((length + 2) / 3);
+    auto output = reinterpret_cast<char *>(calloc(pl + 1, 1)); //+1 for the terminating null that EVP_EncodeBlock adds on
+    const auto ol = EVP_EncodeBlock(reinterpret_cast<unsigned char *>(output), input, length);
+    if (pl != ol)
+    {
+        std::cerr << "Whoops, encode predicted " << pl << " but we got " << ol << "\n";
+    }
+    return output;
+}
+
+unsigned char *base64_decode(const unsigned char *input, int length)
+{
+    const int pl = 3 * length / 4;
+    unsigned char *output = (unsigned char *)calloc(pl + 1, 1);
+    const int ol = EVP_DecodeBlock(output, input, length);
+    if (pl != ol)
+    {
+        fprintf(stderr, "Whoops, decode predicted %d but we got %d\n", pl, ol);
+    }
+    return output;
+}
 
 int create_tcp_server_socket() {
     const int opt = 1;
@@ -115,7 +142,7 @@ std::vector<std::string> splitMsg(std::string &s, std::string delimiter) {
     return parts;
 }
 
-void sendWsResponse(int cfd, std::string acceptKey, std::chrono::time_point<std::chrono::high_resolution_clock> start)
+void sendWsResponse(int cfd, std::string acceptKey)
 {
     std::string response = "HTTP/1.1 101 Switching Protocols\r\nUpgrade:websocket\r\nConnection:Upgrade\r\nSec-WebSocket-Accept:";
     response.append(acceptKey);
@@ -131,7 +158,7 @@ void sendWsResponse(int cfd, std::string acceptKey, std::chrono::time_point<std:
 
 }
 
-void acceptWebSocketConnection(std::string ws_key, int cfd, std::chrono::time_point<std::chrono::high_resolution_clock> start)
+void acceptWebSocketConnection(std::string ws_key, int cfd)
 {
 
     auto stop = std::chrono::high_resolution_clock::now();
@@ -149,16 +176,8 @@ void acceptWebSocketConnection(std::string ws_key, int cfd, std::chrono::time_po
     unsigned char obuf[20];
 
     SHA1(inputbuf, strlen((char *)inputbuf), obuf);
-    char encoded_hash[100]; // Adjust the size as per your requirement
-    int success = base64_encode(obuf, 20, encoded_hash, sizeof(encoded_hash));
-    if (success) {
-        sendWsResponse(cfd, encoded_hash, start);
-    } else {
-        // Handle encoding failure
-        std::cout << "Base64 encoding failed!\n";
-    }
-
-    // sendWsResponse(cfd, hash, start);
+    char *hash = base64_encode(obuf, 20);
+    sendWsResponse(cfd, hash);
 }
 
 std::string giveValue(const std::string data, const std::string keyWord) {
@@ -182,9 +201,8 @@ void onSocketUpgrade(const std::string& data, int socket) {
     std::vector<std::string> lines;
         if ((giveValue(data, "Connection: ")) == "Upgrade") {
             std::string webClientSocketKey  = giveValue(data, "Sec-WebSocket-Key: ");
-            auto start = std::chrono::high_resolution_clock::now();
             // Prepare handshake headers
-            acceptWebSocketConnection(webClientSocketKey, socket, start);
+            acceptWebSocketConnection(webClientSocketKey, socket);
 
             // // Convert string to const char* for send
             // const char* responseBuffer = response.c_str();
