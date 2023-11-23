@@ -5,14 +5,15 @@
 #include <vector>
 #include <sys/epoll.h>
 #include <string>
+#include <openssl/sha.h>
+#include "base64.h"
 #include <sys/socket.h>
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <openssl/sha.h>
-#include <openssl/bio.h>
-#include <openssl/evp.h>
+#include <cstring>
 #include <iostream>
+#include <chrono>
 
 #define DATA_BUFFER 4096
 #define MAX_EVENTS 10000
@@ -72,10 +73,10 @@ void accept_new_connection_request(int server_fd, int efd, struct epoll_event &e
 
     while (1) {
         /* Accept new connections */
-        int conn_sock = accept(server_fd, (struct sockaddr*)&new_addr,
+        int connFD = accept(server_fd, (struct sockaddr*)&new_addr,
                           (socklen_t*)&addrlen);
 
-        if (conn_sock == -1) {
+        if (connFD == -1) {
             /* We have processed all incoming connections. */
             if ((errno == EAGAIN) || (errno == EWOULDBLOCK)) {
                 break;
@@ -87,15 +88,15 @@ void accept_new_connection_request(int server_fd, int efd, struct epoll_event &e
         }
 
         /* Make the new connection non blocking */
-        fcntl(conn_sock, F_SETFL, O_NONBLOCK);
+        fcntl(connFD, F_SETFL, O_NONBLOCK);
 
         /* Monitor new connection for read events in edge triggered mode */
         ev.events = EPOLLIN | EPOLLET;
-        ev.data.fd = conn_sock;
+        ev.data.fd = connFD;
 
         /* Allow epoll to monitor new connection */
-        if (epoll_ctl(efd, EPOLL_CTL_ADD, conn_sock, &ev) == -1) {
-            perror("epoll_ctl: conn_sock");
+        if (epoll_ctl(efd, EPOLL_CTL_ADD, connFD, &ev) == -1) {
+            perror("epoll_ctl: connFD");
             break;
         }
     }
@@ -114,71 +115,92 @@ std::vector<std::string> splitMsg(std::string &s, std::string delimiter) {
     return parts;
 }
 
-std::string createSocketAccept(std::string id) {
-  const std::string WEBSOCKET_MAGIC_STRING_KEY = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"; // WebSocket magic string
+void sendWsResponse(int cfd, std::string acceptKey, std::chrono::time_point<std::chrono::high_resolution_clock> start)
+{
+    std::string response = "HTTP/1.1 101 Switching Protocols\r\nUpgrade:websocket\r\nConnection:Upgrade\r\nSec-WebSocket-Accept:";
+    response.append(acceptKey);
+    response.append("\r\n\r\n");
 
-    std::string dataToHash = id + WEBSOCKET_MAGIC_STRING_KEY;
+    write(cfd, (char *)response.c_str(), response.length());
 
-    unsigned char sha1Hash[SHA_DIGEST_LENGTH];
-    SHA1(reinterpret_cast<const unsigned char*>(dataToHash.c_str()), dataToHash.size(), sha1Hash);
+    auto stop = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(stop - start);
 
-    BIO* base64Bio = BIO_new(BIO_f_base64());
-    BIO* memBio = BIO_new(BIO_s_mem());
-    BIO_set_flags(base64Bio, BIO_FLAGS_BASE64_NO_NL);
-    BIO_push(base64Bio, memBio);
-    BIO_write(base64Bio, sha1Hash, sizeof(sha1Hash));
-    BIO_flush(base64Bio);
 
-    char* encodedBuffer = nullptr;
-    long length = BIO_get_mem_data(memBio, &encodedBuffer);
+    std::cout << "Accepted connection in " << duration.count() << "\n";
 
-    std::string base64Encoded(encodedBuffer, length);
-
-    BIO_free_all(base64Bio);
-
-    return base64Encoded;
 }
 
-std::string prepareHandShakeHeaders(std::string id) {
-  const std::string acceptKey = createSocketAccept(id);
-  std::stringstream response;
-    response << "HTTP/1.1 101 Switching Protocols\r\n";
-    response << "Upgrade: websocket\r\n";
-    response << "Connection: Upgrade\r\n";
-    response << "Sec-WebSocket-Accept: " << acceptKey << "\r\n";
-    response << "\r\n";
-    return response.str();
+void acceptWebSocketConnection(std::string ws_key, int cfd, std::chrono::time_point<std::chrono::high_resolution_clock> start)
+{
+
+    auto stop = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(stop - start);
+
+
+    std::cout << "Accepting connection " << duration.count() << "\n";
+
+    ws_key.append("258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
+
+    unsigned char inputbuf[ws_key.length()];
+    std::copy(ws_key.begin(), ws_key.end(), inputbuf);
+    inputbuf[ws_key.length()] = 0;
+
+    unsigned char obuf[20];
+
+    SHA1(inputbuf, strlen((char *)inputbuf), obuf);
+    char encoded_hash[100]; // Adjust the size as per your requirement
+    int success = base64_encode(obuf, 20, encoded_hash, sizeof(encoded_hash));
+    if (success) {
+        sendWsResponse(cfd, encoded_hash, start);
+    } else {
+        // Handle encoding failure
+        std::cout << "Base64 encoding failed!\n";
+    }
+
+    // sendWsResponse(cfd, hash, start);
+}
+
+std::string giveValue(const std::string data, const std::string keyWord) {
+    size_t connectionIndex = data.find(keyWord);
+    if (connectionIndex != std::string::npos) {
+        connectionIndex += keyWord.length();
+
+        size_t endOfLineIndex = data.find("\r", connectionIndex);
+        if (endOfLineIndex != std::string::npos) {
+            std::string substringAfterConnection = data.substr(connectionIndex, endOfLineIndex - connectionIndex);
+            return substringAfterConnection;
+        }
+    } else {
+        std::cout << "Connection header not found" << std::endl;
+    }
+    return "";
 }
 
 void onSocketUpgrade(const std::string& data, int socket) {
     std::istringstream ss(data);
-    std::string line;
-    while (std::getline(ss, line, '\n')) {
-        if (line.substr(0, 7) == "Upgrade") {
-            // Assuming the key is on the 11th line
-            std::string webClientSocketKey = line.substr(line.find(':') + 1);
-            std::cout << webClientSocketKey << " connected!\n";
-
+    std::vector<std::string> lines;
+        if ((giveValue(data, "Connection: ")) == "Upgrade") {
+            std::string webClientSocketKey  = giveValue(data, "Sec-WebSocket-Key: ");
+            auto start = std::chrono::high_resolution_clock::now();
             // Prepare handshake headers
-            std::string response = prepareHandShakeHeaders(webClientSocketKey);
+            acceptWebSocketConnection(webClientSocketKey, socket, start);
 
-            // Convert string to const char* for send
-            const char* responseBuffer = response.c_str();
+            // // Convert string to const char* for send
+            // const char* responseBuffer = response.c_str();
 
-            // Send the response
-            send(socket, responseBuffer, response.size(), 0);
+            // // Send the response
+            // send(socket, responseBuffer, response.size(), 0);
         }
         else{
             std::cerr << "Not WebSocket Request\n";
         }
-    }
 }
-
 
 void recv_and_forward_message(int fd) {
     std::string remainder = "";
 
-    while (1) {
+    // while (1) {
         char buf[DATA_BUFFER];
         int ret_data = recv(fd, buf, DATA_BUFFER, 0);
 
@@ -194,20 +216,20 @@ void recv_and_forward_message(int fd) {
             // for (size_t i = 0; i < parts.size(); i++) {
             //     std::cout << parts[i] << std::endl;  // Print each part
             // }
-            std::cout << msg << std::endl;
+            // std::cout << msg << std::endl;
             onSocketUpgrade(msg, fd);
+
         }
-        else {
-            /* Stopped sending new data */
-            std::cerr << "Empty or invalid data received\n";
-            break;
-        }
-    }
+        // else {
+        //     /* Stopped sending new data */
+        //     break;
+        // }
+    // }
 }
 
 int main(int argc, char const* argv[])
 {
-    int conn_sock;
+    int connFD;
     ssize_t valread;
     const std::string WEBSOCKET_MAGIC_STRING_KEY = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
@@ -243,15 +265,6 @@ if (epoll_ctl (efd, EPOLL_CTL_ADD, server_fd, &ev) == -1) {
     perror ("epoll_ctl");
     exit(EXIT_FAILURE);
 }
- 
-    // Forcefully attaching socket to the port 8080
-    // if (setsockopt(server_fd, SOL_SOCKET,
-    //                SO_REUSEADDR | SO_REUSEPORT, &opt,
-    //                sizeof(opt))) {
-    //     perror("setsockopt");
-    //     exit(EXIT_FAILURE);
-    // }
-
     while (1) {
     /* Returns only sockets for which there are events */
     int nfds = epoll_wait(efd, events, MAX_EVENTS, -1);
@@ -286,7 +299,7 @@ if (epoll_ctl (efd, EPOLL_CTL_ADD, server_fd, &ev) == -1) {
 }
 
     // closing the connected socket
-    close(conn_sock);
+    close(connFD);
     // closing the listening socket
     close(server_fd);
     return 0;
