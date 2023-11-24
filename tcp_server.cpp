@@ -148,6 +148,9 @@ void sendWsResponse(int cfd, std::string acceptKey)
     response.append(acceptKey);
     response.append("\r\n\r\n");
 
+    char buf[DATA_BUFFER];
+
+
     write(cfd, (char *)response.c_str(), response.length());
 
     auto stop = std::chrono::high_resolution_clock::now();
@@ -196,53 +199,46 @@ std::string giveValue(const std::string data, const std::string keyWord) {
     return "";
 }
 
-void onSocketUpgrade(const std::string& data, int socket) {
-    std::istringstream ss(data);
-    std::vector<std::string> lines;
-        if ((giveValue(data, "Connection: ")) == "Upgrade") {
-            std::string webClientSocketKey  = giveValue(data, "Sec-WebSocket-Key: ");
-            // Prepare handshake headers
-            acceptWebSocketConnection(webClientSocketKey, socket);
-
-            // // Convert string to const char* for send
-            // const char* responseBuffer = response.c_str();
-
-            // // Send the response
-            // send(socket, responseBuffer, response.size(), 0);
-        }
-        else{
-            std::cerr << "Not WebSocket Request\n";
-        }
-}
-
 void recv_and_forward_message(int fd) {
     std::string remainder = "";
 
-    // while (1) {
+    while (1) {
         char buf[DATA_BUFFER];
         int ret_data = recv(fd, buf, DATA_BUFFER, 0);
 
         if (ret_data > 0) {
             /* Read ret_data number of bytes from buf */
             std::string msg(buf, buf + ret_data);
-            // msg = remainder + msg;
+            msg = remainder + msg;
 
-            // /* Parse and split incoming bytes into individual messages */
-            // std::vector<std::string> parts = splitMsg(msg, "<EOM>");
-            // remainder = msg;
+            /* Parse and split incoming bytes into individual messages */
+            std::vector<std::string> parts = splitMsg(msg, "<EOM>");
+            remainder = msg;
 
-            // for (size_t i = 0; i < parts.size(); i++) {
-            //     std::cout << parts[i] << std::endl;  // Print each part
-            // }
+            for (size_t i = 0; i < parts.size(); i++) {
+                std::cout << parts[i] << std::endl;  // Print each part
+            }
             // std::cout << msg << std::endl;
-            onSocketUpgrade(msg, fd);
+            if ((giveValue(msg, "Connection: ")) == "Upgrade") {
+                std::string webClientSocketKey  = giveValue(msg, "Sec-WebSocket-Key: ");
+                // Prepare handshake headers
+                acceptWebSocketConnection(webClientSocketKey, socket);
 
+            // // Convert string to const char* for send
+            // const char* responseBuffer = response.c_str();
+
+            // // Send the response
+            // send(socket, responseBuffer, response.size(), 0);
+            }
+            else{
+                std::cout << "Not WebSocket Request\n";
+            }
         }
-        // else {
-        //     /* Stopped sending new data */
-        //     break;
-        // }
-    // }
+        else {
+            /* Stopped sending new data */
+            break;
+        }
+    }
 }
 
 int main(int argc, char const* argv[])
