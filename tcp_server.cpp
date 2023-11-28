@@ -1,22 +1,20 @@
 #include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sstream>
-#include <vector>
-#include <sys/epoll.h>
-#include <string>
-#include <openssl/evp.h>
-#include <openssl/sha.h>
+#include <string.h>
 #include <sys/socket.h>
+#include <sys/epoll.h>
 #include <unistd.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <cstring>
+#include <signal.h>
 #include <iostream>
+#include <openssl/sha.h>
+#include <openssl/evp.h>
+#include <thread>
 #include <chrono>
 
-#define DATA_BUFFER 4096
-#define MAX_EVENTS 10000
+
+#define MAX 500000
+#define PORT 8080
 
 auto start = std::chrono::high_resolution_clock::now();
 
@@ -45,111 +43,11 @@ unsigned char *base64_decode(const unsigned char *input, int length)
     return output;
 }
 
-int create_tcp_server_socket() {
-    const int opt = 1;
-
-    /* Step1: create a TCP socket */
-    int fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (fd == -1) {
-        perror("Could not create socket");
-        exit(EXIT_FAILURE);
-    }
-
-    printf("Created a socket with fd: %d\n", fd);
-
-    /* Step2: set socket options */
-    if(setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (char *)&opt, sizeof(opt)) == -1) {
-
-        perror("Could not set socket options");
-        close(fd);
-        exit(EXIT_FAILURE);
-    }
-
-    /* Initialize the socket address structure */
-    /* Listen on port 8080 */
-    struct sockaddr_in saddr;
-
-    saddr.sin_family = AF_INET;
-    saddr.sin_port = htons(8080);
-    saddr.sin_addr.s_addr = INADDR_ANY;
-
-    /* Step3: bind the socket to port 8080 */
-    if (bind(fd, (struct sockaddr *)&saddr, sizeof(struct sockaddr_in)) == -1) {
-        perror("Could not bind to socket");
-        close(fd);
-        exit(EXIT_FAILURE);
-    }
-
-    /* Step4: listen for incoming connections */
-    /*
-       The socket will allow a maximum of 1000 clients to be queued before
-       refusing connection requests.
-    */
-    if (listen(fd, 1000) == -1) {
-        perror("Could not listen on socket");
-        close(fd);
-        exit(EXIT_FAILURE);
-    }
-
-    return fd;
-}
-
-void accept_new_connection_request(int server_fd, int efd, struct epoll_event &ev) {
-    struct sockaddr_in new_addr;
-    int addrlen = sizeof(struct sockaddr_in);
-
-    while (1) {
-        /* Accept new connections */
-        int connFD = accept(server_fd, (struct sockaddr*)&new_addr,
-                          (socklen_t*)&addrlen);
-
-        if (connFD == -1) {
-            /* We have processed all incoming connections. */
-            if ((errno == EAGAIN) || (errno == EWOULDBLOCK)) {
-                break;
-            }
-            else {
-                perror ("accept");
-                break;
-            }
-        }
-
-        /* Make the new connection non blocking */
-        fcntl(connFD, F_SETFL, O_NONBLOCK);
-
-        /* Monitor new connection for read events in edge triggered mode */
-        ev.events = EPOLLIN | EPOLLET;
-        ev.data.fd = connFD;
-
-        /* Allow epoll to monitor new connection */
-        if (epoll_ctl(efd, EPOLL_CTL_ADD, connFD, &ev) == -1) {
-            perror("epoll_ctl: connFD");
-            break;
-        }
-    }
-}
-
-std::vector<std::string> splitMsg(std::string &s, std::string delimiter) {
-    size_t pos = 0;
-    std::vector<std::string> parts;
-
-    while ((pos = s.find(delimiter)) != std::string::npos) {
-        std::string token = s.substr(0, pos);
-        if (token.size() > 0) parts.push_back(token);
-        s.erase(0, pos + delimiter.length());
-    }
-
-    return parts;
-}
-
-void sendWsResponse(int cfd, std::string acceptKey)
+void sendWsResponse(int cfd, char *acceptKey)
 {
-    std::string response = "HTTP/1.1 101 Switching Protocols\r\nUpgrade:websocket\r\nConnection:Upgrade\r\nSec-WebSocket-Accept:";
+    std::string response = "HTTP/1.1 101 Switching Protocols\r\nUpgrade:websocket\r\nConnection:upgrade\r\nSec-WebSocket-Accept:";
     response.append(acceptKey);
-    response.append("\r\n\r\n");
-
-    char buf[DATA_BUFFER];
-
+    response.append("\r\n\n");
 
     write(cfd, (char *)response.c_str(), response.length());
 
@@ -161,7 +59,16 @@ void sendWsResponse(int cfd, std::string acceptKey)
 
 }
 
-void acceptWebSocketConnection(std::string ws_key, int cfd)
+void sendHttpResponse(int cfd)
+{
+
+    char msg[] = "HTTP/1.1 200 OK\nContent-Type:text/html; charset=UTF-8\n\nHello world";
+    write(cfd, msg, sizeof(msg));
+
+    close(cfd);
+}
+
+void acceptWebSocketConnection(int cfd, std::string ws_key)
 {
 
     auto stop = std::chrono::high_resolution_clock::now();
@@ -180,141 +87,212 @@ void acceptWebSocketConnection(std::string ws_key, int cfd)
 
     SHA1(inputbuf, strlen((char *)inputbuf), obuf);
     char *hash = base64_encode(obuf, 20);
+
     sendWsResponse(cfd, hash);
 }
 
-std::string giveValue(const std::string data, const std::string keyWord) {
-    size_t connectionIndex = data.find(keyWord);
-    if (connectionIndex != std::string::npos) {
-        connectionIndex += keyWord.length();
-
-        size_t endOfLineIndex = data.find("\r", connectionIndex);
-        if (endOfLineIndex != std::string::npos) {
-            std::string substringAfterConnection = data.substr(connectionIndex, endOfLineIndex - connectionIndex);
-            return substringAfterConnection;
-        }
-    } else {
-        std::cout << "Connection header not found" << std::endl;
-    }
-    return "";
-}
-
-void recv_and_forward_message(int fd) {
-    std::string remainder = "";
-
-    while (1) {
-        char buf[DATA_BUFFER];
-        int ret_data = recv(fd, buf, DATA_BUFFER, 0);
-
-        if (ret_data > 0) {
-            /* Read ret_data number of bytes from buf */
-            std::string msg(buf, buf + ret_data);
-            msg = remainder + msg;
-
-            /* Parse and split incoming bytes into individual messages */
-            std::vector<std::string> parts = splitMsg(msg, "<EOM>");
-            remainder = msg;
-
-            for (size_t i = 0; i < parts.size(); i++) {
-                std::cout << parts[i] << std::endl;  // Print each part
-            }
-            // std::cout << msg << std::endl;
-            if ((giveValue(msg, "Connection: ")) == "Upgrade") {
-                std::string webClientSocketKey  = giveValue(msg, "Sec-WebSocket-Key: ");
-                // Prepare handshake headers
-                acceptWebSocketConnection(webClientSocketKey, socket);
-
-            // // Convert string to const char* for send
-            // const char* responseBuffer = response.c_str();
-
-            // // Send the response
-            // send(socket, responseBuffer, response.size(), 0);
-            }
-            else{
-                std::cout << "Not WebSocket Request\n";
-            }
-        }
-        else {
-            /* Stopped sending new data */
-            break;
-        }
-    }
-}
-
-int main(int argc, char const* argv[])
+bool acceptWsConnection(int clientSocket, char *buffer)
 {
-    int connFD;
-    ssize_t valread;
-    const std::string WEBSOCKET_MAGIC_STRING_KEY = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+    // fetch headers and request line
+    std::string buf(buffer);
+    size_t sep = buf.find("\r\n\r\n");
+    if (sep == std::string::npos)
+        return false;
 
-/* Get the socket server fd */
-int server_fd = create_tcp_server_socket();
+    std::string headers = buf.substr(0, sep);
 
-/* Make the socket non blocking, will not wait for connection
-    indefinitely */
-fcntl(server_fd, F_SETFL, O_NONBLOCK);
+    std::string request = headers.substr(0, headers.find("\r\n"));
+    if (request.size() == 0)
+        return false;
 
-if (server_fd == -1) {
-    perror ("Could not create socket");
-    exit(EXIT_FAILURE);
-}
+    std::string part;
+    part = request.substr(0, request.find(" "));
+    if (part.compare("GET") != 0 && part.compare("get") != 0 && part.compare("Get") != 0)
+        return false;
 
-struct epoll_event ev, events[MAX_EVENTS];
+    part = request.substr(request.rfind("/") + 1);
+    if (atof(part.c_str()) < 1.1)
+        return false;
 
-/* Create epoll instance */
-int efd = epoll_create1 (0);
+    std::string host;
+    std::string ws_key;
+    std::string ws_version;
+    headers = headers.substr(headers.find("\r\n") + 2);
 
-if (efd == -1) {
-    perror ("epoll_create");
-    exit(EXIT_FAILURE);
-}
+    while (headers.size() > 0)
+    {
+        request = headers.substr(0, headers.find("\r\n"));
+        if (request.find(":") != std::string::npos)
+        {
+            std::string key = request.substr(0, request.find(":"));
+            if (key.find_first_not_of(" ") != std::string::npos)
+                key = key.substr(key.find_first_not_of(" "));
+            if (key.find_last_not_of(" ") != std::string::npos)
+                key = key.substr(0, key.find_last_not_of(" ") + 1);
 
-ev.data.fd = server_fd;
+            std::string value = request.substr(request.find(":") + 1);
+            if (value.find_first_not_of(" ") != std::string::npos)
+                value = value.substr(value.find_first_not_of(" "));
+            if (value.find_last_not_of(" ") != std::string::npos)
+                value = value.substr(0, value.find_last_not_of(" ") + 1);
 
-/* Interested in read's events using edge triggered mode */
-ev.events = EPOLLIN | EPOLLET;
-
-/* Allow epoll to monitor the server_fd socket */
-if (epoll_ctl (efd, EPOLL_CTL_ADD, server_fd, &ev) == -1) {
-    perror ("epoll_ctl");
-    exit(EXIT_FAILURE);
-}
-    while (1) {
-    /* Returns only sockets for which there are events */
-    int nfds = epoll_wait(efd, events, MAX_EVENTS, -1);
-
-    if (nfds == -1) {
-        perror("epoll_wait");
-        exit(EXIT_FAILURE);
+            if (key.compare("Host") == 0)
+            {
+                host = value;
+            }
+            else if (key.compare("Sec-WebSocket-Key") == 0)
+            {
+                ws_key = value;
+            }
+            else if (key.compare("Sec-WebSocket-Version") == 0)
+            {
+                ws_version = value;
+            }
+        }
+        if (headers.find("\r\n") == std::string::npos)
+            break;
+        headers = headers.substr(headers.find("\r\n") + 2);
     }
 
-    /* Iterate over sockets only having events */
-    for (int i = 0; i < nfds; i++) {
-        int fd = events[i].data.fd;
-        
-        if (fd == server_fd) {
-            /* New connection request received */
-            accept_new_connection_request(fd, efd, ev);
-        }
-        
-        else if ((events[i].events & EPOLLERR) || 
-                        (events[i].events & EPOLLHUP) ||
-                        (!(events[i].events & EPOLLIN))) {
+    if (ws_key.empty())
+    {
+        sendHttpResponse(clientSocket);
+    }
+    else
+    {
+        acceptWebSocketConnection(clientSocket, ws_key);
+    }
 
-            /* Client connection closed */
-            close(fd);
-        }
+    return true;
+}
+
+bool isConnectionUpgrade()
+{
+    return false;
+}
+
+void handleClient(int cfd)
+{
+
+    auto stop = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(stop - start);
+
+
+    std::cout << "Received handshake in " << duration.count() << "\n";
+
+
+    // read
+    const unsigned char buf[BUFSIZ];
+    
+    int buflen = read(cfd, buf, BUFSIZ - 1);
+    if (buflen > 0)
+    { 
         
-        else {
-            /* Received data on an existing client socket */
-            recv_and_forward_message(fd);
-        }
+        // do something with data
+        buf[buflen] = '\0';
+        std::string msg = buf;
+        unsigned char b = base64_decode(buf, sizeof(buf));
+        std::cout<<b<<std::endl;
+        acceptWsConnection(cfd, buf);
+    }else{
+        close(cfd);
     }
 }
 
-    // closing the connected socket
-    close(connFD);
+int main()
+{
+
+    std::cout << "TCP server started" << std::endl;
+
+    // Creating Socket
+    int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
+
+    // Attach port
+    int opt = 1;
+    struct sockaddr_in address;
+    int addresslen = sizeof(address);
+
+    std::cout << "Creating socket" << std::endl;
+
+    setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt));
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = INADDR_ANY;
+    address.sin_port = htons(PORT);
+
+    // Bind on network
+    bind(serverSocket, (struct sockaddr *)&address, sizeof(address));
+
+    // Start listening for connections
+    listen(serverSocket, 500000);
+
+    // Read mutliple connections
+    struct epoll_event ev;
+    struct epoll_event evlist[MAX];
+    int ret;
+    int epfd;
+    struct sockaddr_in clientAddress;
+
+    epfd = epoll_create1(0);
+    ev.events = EPOLLIN;
+
+    ev.data.fd = STDIN_FILENO; // for quit
+    ret = epoll_ctl(epfd, EPOLL_CTL_ADD, STDIN_FILENO, &ev);
+
+    ev.data.fd = serverSocket;
+    ret = epoll_ctl(epfd, EPOLL_CTL_ADD, serverSocket, &ev);
+
+    int i;
+    char buf[BUFSIZ];
+    int buflen;
+    int nfds;
+    int cfd;
+
+    for (;;)
+    {
+
+        // epoll
+        nfds = epoll_wait(epfd, evlist, MAX, -1);
+
+        for (i = 0; i < nfds; i++)
+        {
+
+            if (evlist[i].data.fd == STDIN_FILENO)
+            {
+
+                fgets(buf, BUFSIZ - 1, stdin);
+                if (!strcmp(buf, "quit") || !strcmp(buf, "exit"))
+                {
+                    close(serverSocket);
+                    exit(0);
+                }
+            }
+            else if (evlist[i].data.fd == serverSocket)
+            {
+
+                start = std::chrono::high_resolution_clock::now();
+
+                // accept
+                cfd = accept(serverSocket, (struct sockaddr *)&clientAddress, (socklen_t *)&addresslen);
+                printf("a user connected\n");
+
+                // epoll_ctl
+                ev.events = EPOLLIN;
+                ev.data.fd = cfd;
+                ret = epoll_ctl(epfd, EPOLL_CTL_ADD, cfd, &ev);
+            }
+            else
+            {
+
+                int clientFd = evlist[i].data.fd;
+                handleClient(clientFd);
+                // std::thread clientThread(handleClient, clientFd);
+                // clientThread.detach();
+            }
+        }
+    }
+
     // closing the listening socket
-    close(server_fd);
+    shutdown(serverSocket, SHUT_RDWR);
+
     return 0;
 }
