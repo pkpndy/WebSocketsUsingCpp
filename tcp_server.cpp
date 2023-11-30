@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <vector>
+#include <algorithm>
 #include <sys/socket.h>
 #include <sys/epoll.h>
 #include <unistd.h>
@@ -16,6 +18,16 @@
 #define MAX 500000
 #define PORT 8080
 
+const char SEVEN_BITS_INTEGER_MARKER = 125;
+const char SIXTEEN_BITS_INTEGER_MARKER = 126;
+const char SIXTYFOUR_BITS_INTEGER_MARKER = 127;
+
+const int MAXIMUM_SIXTEEN_BITS_INTEGER = 65536;
+const int MASK_KEY_BYTES_LENGTH = 4;
+const char OPCODE_TEXT = 0x01;
+
+const char FIRST_BIT = 128;
+
 auto start = std::chrono::high_resolution_clock::now();
 
 
@@ -29,84 +41,6 @@ char *base64_encode(const unsigned char *input, int length)
         std::cerr << "Whoops, encode predicted " << pl << " but we got " << ol << "\n";
     }
     return output;
-}
-
-unsigned char *base64_decode(const unsigned char *input, int length)
-{
-    const int pl = 3 * length / 4;
-    std::cout <<"length:"<<length<<std::endl;
-    unsigned char *output = (unsigned char *)calloc(pl + 1, 1);
-    const int ol = EVP_DecodeBlock(output, input, length);
-    if (pl != ol)
-    {
-        fprintf(stderr, "Whoops, decode predicted %d but we got %d\n", pl, ol);
-    }
-    return output;
-}
-
-const int FIN_BIT = 0x80;
-const int OPCODE_MASK = 0x0F;
-const int MASK_BIT = 0x80;
-const int PAYLOAD_LEN_MASK = 0x7F;
-const int PAYLOAD_LEN_EXT16 = 126;
-const int PAYLOAD_LEN_EXT64 = 127;
-const int MASKING_KEY_LEN = 4;
-
-// Function to process received WebSocket frames
-void processWebSocketFrames(int socketFD) {
-    char buffer[4096]; // Adjust buffer size as needed
-    int bytesRead = recv(socketFD, buffer, sizeof(buffer), 0);
-
-    if (bytesRead <= 0) {
-        // Handle errors or closed connection
-        return;
-    }
-
-    // Parse the WebSocket frame header
-    int index = 0;
-    int opcode = buffer[index] & OPCODE_MASK;
-    bool isFinalFrame = buffer[index] & FIN_BIT;
-    bool isMasked = buffer[index + 1] & MASK_BIT;
-
-    int payloadLen = buffer[index + 1] & PAYLOAD_LEN_MASK;
-    index += 2;
-
-    if (payloadLen == PAYLOAD_LEN_EXT16) {
-        // Handle extended payload length (16-bit)
-        // Extract payload length from the next 2 bytes
-        // Update index accordingly
-    } else if (payloadLen == PAYLOAD_LEN_EXT64) {
-        // Handle extended payload length (64-bit)
-        // Extract payload length from the next 8 bytes
-        // Update index accordingly
-    }
-
-    // Masking key (if present)
-    char maskingKey[MASKING_KEY_LEN] = {};
-    if (isMasked) {
-        // Extract masking key from the next 4 bytes
-        // Update index accordingly
-    }
-
-    // Get payload data
-    char payloadData[4096]; // Adjust size based on payload length
-    memcpy(payloadData, buffer + index, payloadLen);
-
-    if (isMasked) {
-        // Unmask payload data using the masking key
-        for (int i = 0; i < payloadLen; ++i) {
-            payloadData[i] ^= maskingKey[i % MASKING_KEY_LEN];
-        }
-    }
-
-    // Handle the received message based on the opcode (e.g., text, binary)
-    if (opcode == 0x01) { // Text frame
-        std::string message(payloadData, payloadLen);
-        // Process and handle the received text message
-        std::cout << "Received text message: " << message << std::endl;
-    }
-
-    // Handle other opcodes (e.g., binary frames, control frames) as needed
 }
 
 void sendWsResponse(int cfd, char *acceptKey)
@@ -237,60 +171,129 @@ bool isConnectionUpgrade()
     return false;
 }
 
-// Assuming you have established a TCP connection and have a socketFD for communication
+std::string prepareMessage(const std::string& message) {
+    // fetch message length
+    int messageLength = message.size();
 
-// Read and parse WebSocket frames
-// void processWebSocketFrames(int socketFD) {
-//     char buffer[4096]; // Adjust buffer size as needed
-//     int bytesRead = recv(socketFD, buffer, sizeof(buffer), 0);
+    // set max payload length per frame
+    int bufferSize = 4096;
+    size_t bufferLength = bufferSize;
+    char *buf;
+    size_t totalLength;
 
-//     // Check for errors or connection closure
-//     if (bytesRead <= 0) {
-//         // Handle errors or closed connection
-//         return;
-//     }
+    const char firstByte = 0x80 | OPCODE_TEXT;
 
-//     // Parse WebSocket frames
-//     // Assuming a simplified scenario without masking, fragmentation, etc.
-//     // This example assumes handling a single-frame message
+    // set payload length variables for frame
+        if (bufferLength <= 125) {
+            // int payloadLength = bufferLength;
+            totalLength = bufferLength + 2;
+            buf = new char[totalLength];
+            buf[0] = 0x80 | OPCODE_TEXT;
+            buf[1] = bufferLength;
+            memcpy(buf+2, message.c_str(), message.size());
+        }
+        else if (bufferLength <= 65535) {
+            // int payloadLength = WS_PAYLOAD_LENGTH_16;
+            totalLength = bufferLength + 4;
+            buf = new char[totalLength];
+            buf[0] = 0x80 | OPCODE_TEXT;
+            buf[1] = WS_PAYLOAD_LENGTH_16;
+            buf[2] = bufferLength >> 8;
+            buf[3] = bufferLength;
+            memcpy(buf+4, message.c_str(), message.size());
+        }
+        else {
+            // int payloadLength = WS_PAYLOAD_LENGTH_63;
+            totalLength = bufferLength + 10;
+            buf = new char[totalLength];
+            buf[0] = 0x80 | OPCODE_TEXT;
+            buf[1] = WS_PAYLOAD_LENGTH_63;
+            buf[2] = 0;
+            buf[3] = 0;
+            buf[4] = 0;
+            buf[5] = 0;
+            buf[6] = bufferLength >> 24;
+            buf[7] = bufferLength >> 16;
+            buf[8] = bufferLength >> 8;
+            buf[9] = bufferLength;
+            memcpy(buf+10, message.c_str(), message.size());
+        }
 
-//     // Parse the WebSocket frame
-//     bool isFinalFrame = (buffer[0] & 0x80) != 0; // Check if it's the final frame
-//     int opcode = buffer[0] & 0x0F; // Extract the opcode
+    // if (messageSize <= SEVEN_BITS_INTEGER_MARKER) {
+    //     dataFrameBuffer.push_back(firstByte);
+    //     dataFrameBuffer.push_back(static_cast<char>(messageSize));
+    // } else if (messageSize <= MAXIMUM_SIXTEEN_BITS_INTEGER) {
+    //     std::vector<char> target(4, 0);
+    //     target[0] = firstByte;
+    //     target[1] = SIXTEEN_BITS_INTEGER_MARKER;
 
-//     if (opcode == 0x01) { // Text frame
-//         int payloadLength = buffer[1] & 0x7F; // Extract payload length
-//         int payloadOffset = 2; // Start of payload data
+    //     target[2] = static_cast<char>((messageSize >> 8) & 0xFF);
+    //     target[3] = static_cast<char>(messageSize & 0xFF);
 
-//         if (payloadLength == 126) {
-//             // Extended payload length (16-bit)
-//             payloadLength = (buffer[2] << 8) | buffer[3];
-//             payloadOffset = 4;
-//         } else if (payloadLength == 127) {
-//             // Extended payload length (64-bit)
-//             // Handle extended length for larger payloads
-//             // ...
-//         }
+    //     dataFrameBuffer = target;
+    // } else {
+    //     throw std::runtime_error("Message too long!");
+    // }
 
-//         // Extract message payload
-//         std::string message;
-//         for (int i = payloadOffset; i < bytesRead; ++i) {
-//             message += buffer[i];
-//         }
+    int totalLength = dataFrameBuffer.size() + messageSize;
+    std::string dataFrameResponse(dataFrameBuffer.begin(), dataFrameBuffer.end());
+    dataFrameResponse += std::string(msg.begin(), msg.end());
 
-//         // Handle the received message (text frame)
-//         std::cout << "Received text message: " << message << std::endl;
-//     } else if (opcode == 0x02) { // Binary frame
-//         // Handle binary frame (similar logic as text frame)
-//     }
+    return dataFrameResponse;
+}
 
-//     // Handle continuation frames, control frames, etc. (if required)
-//     // ...
+void sendMessage(const std::string& msg, const std::string& socket) {
+    std::string data = prepareMessage(msg);
+    // Simulate socket write
+    std::cout << "Sending message: " << data << " to socket: " << socket << std::endl;
+}
 
-//     // Continue reading and processing WebSocket frames (loop or recursion)
-//     processWebSocketFrames(socketFD);
-// }
+void onSocketReadable(char *buffer) {
+    // // Simulate incoming data from socket
+    std::vector<char> socketBuffer(socketData.begin(), socketData.end());
 
+    // Simulate parsing of WebSocket frame
+    // char opcode = socketBuffer[0];
+    // char markerAndPayloadLength = socketBuffer[1];
+
+    // char lengthIndicatorInBits = markerAndPayloadLength - FIRST_BIT;
+
+    // int messageLength = 0;
+    // if (lengthIndicatorInBits <= SEVEN_BITS_INTEGER_MARKER) {
+    //     messageLength = lengthIndicatorInBits;
+    // } else if (lengthIndicatorInBits == SIXTEEN_BITS_INTEGER_MARKER) {
+    //     messageLength = (socketBuffer[2] << 8) | socketBuffer[3];
+    // } else {
+    //     throw std::runtime_error("Message too long!");
+    // }
+
+    // fetch first 2 bytes of header
+    unsigned char octet0 = buffer.at(0);
+    unsigned char octet1 = buffer.at(1);
+
+    std::string maskKey(buffer.begin() + 2, bu.begin() + 6);
+    std::vector<char> encoded(socketBuffer.begin() + 6, socketBuffer.begin() + 6 + messageLength);
+
+    // Simulated unmasking and decoding
+    std::string decoded = unmask(encoded, maskKey);
+
+    std::cout << "Received message: " << decoded << std::endl;
+
+    // Simulated sending a response message
+    std::string msg = "Response: " + decoded;
+    sendMessage(msg, "client_socket");
+}
+
+std::string unmask(const std::vector<char>& encodedBuffer, const std::string& maskKey) {
+    std::vector<char> finalBuffer = encodedBuffer;
+
+    for (size_t index = 0; index < encodedBuffer.size(); ++index) {
+        finalBuffer[index] = encodedBuffer[index] ^ maskKey[index % MASK_KEY_BYTES_LENGTH];
+    }
+
+    std::string decoded(finalBuffer.begin(), finalBuffer.end());
+    return decoded;
+}
 
 void handleClient(int cfd)
 {
@@ -304,28 +307,16 @@ void handleClient(int cfd)
 
     // read
     char buf[BUFSIZ];
-
-    int buflen = recv(cfd, buf, BUFSIZ - 1, 0);
+    
+    int buflen = read(cfd, buf, BUFSIZ - 1);
     if (buflen > 0)
-    {
-
+    { 
+        
         // do something with data
         buf[buflen] = '\0';
         std::string msg = buf;
-        // const char* charArray = "your char array";
-        if ((buf[0] & 0x0F) == 0x01) { // Text frame
-        int payloadLength = buf[1] & 0x7F; // Extract payload length
-        int payloadOffset = 2; // Start of payload data
-
-        std::string message(buf + payloadOffset, payloadLength);
-        for (int i = payloadOffset; i < buflen; ++i) {
-            message += buf[i];
-        }
-
-        // Handle the received message (text frame)
-        std::cout << "Received text message: " << message << std::endl;
-        }
         acceptWsConnection(cfd, buf);
+    onSocketReadable(buf);
 
     }else{
         close(cfd);
