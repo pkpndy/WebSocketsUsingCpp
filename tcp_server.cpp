@@ -43,6 +43,19 @@ char *base64_encode(const unsigned char *input, int length)
     return output;
 }
 
+unsigned char *base64_decode(const unsigned char *input, int length)
+{
+    const int pl = 3 * length / 4;
+    std::cout <<"length:"<<length<<std::endl;
+    unsigned char *output = (unsigned char *)calloc(pl + 1, 1);
+    const int ol = EVP_DecodeBlock(output, input, length);
+    if (pl != ol)
+    {
+        fprintf(stderr, "Whoops, decode predicted %d but we got %d\n", pl, ol);
+    }
+    return output;
+}
+
 void sendWsResponse(int cfd, char *acceptKey)
 {
     std::string response = "HTTP/1.1 101 Switching Protocols\r\nUpgrade:websocket\r\nConnection:upgrade\r\nSec-WebSocket-Accept:";
@@ -172,68 +185,27 @@ bool isConnectionUpgrade()
 }
 
 std::string prepareMessage(const std::string& message) {
-    // fetch message length
-    int messageLength = message.size();
+    std::vector<char> msg(message.begin(), message.end());
+    int messageSize = msg.size();
 
-    // set max payload length per frame
-    int bufferSize = 4096;
-    size_t bufferLength = bufferSize;
-    char *buf;
-    size_t totalLength;
+    std::vector<char> dataFrameBuffer(4096);
 
     const char firstByte = 0x80 | OPCODE_TEXT;
+    if (messageSize <= SEVEN_BITS_INTEGER_MARKER) {
+        dataFrameBuffer.push_back(firstByte);
+        dataFrameBuffer.push_back(static_cast<char>(messageSize));
+    } else if (messageSize <= MAXIMUM_SIXTEEN_BITS_INTEGER) {
+        std::vector<char> target(4, 0);
+        target[0] = firstByte;
+        target[1] = SIXTEEN_BITS_INTEGER_MARKER;
 
-    // set payload length variables for frame
-        if (bufferLength <= 125) {
-            // int payloadLength = bufferLength;
-            totalLength = bufferLength + 2;
-            buf = new char[totalLength];
-            buf[0] = 0x80 | OPCODE_TEXT;
-            buf[1] = bufferLength;
-            memcpy(buf+2, message.c_str(), message.size());
-        }
-        else if (bufferLength <= 65535) {
-            // int payloadLength = WS_PAYLOAD_LENGTH_16;
-            totalLength = bufferLength + 4;
-            buf = new char[totalLength];
-            buf[0] = 0x80 | OPCODE_TEXT;
-            buf[1] = WS_PAYLOAD_LENGTH_16;
-            buf[2] = bufferLength >> 8;
-            buf[3] = bufferLength;
-            memcpy(buf+4, message.c_str(), message.size());
-        }
-        else {
-            // int payloadLength = WS_PAYLOAD_LENGTH_63;
-            totalLength = bufferLength + 10;
-            buf = new char[totalLength];
-            buf[0] = 0x80 | OPCODE_TEXT;
-            buf[1] = WS_PAYLOAD_LENGTH_63;
-            buf[2] = 0;
-            buf[3] = 0;
-            buf[4] = 0;
-            buf[5] = 0;
-            buf[6] = bufferLength >> 24;
-            buf[7] = bufferLength >> 16;
-            buf[8] = bufferLength >> 8;
-            buf[9] = bufferLength;
-            memcpy(buf+10, message.c_str(), message.size());
-        }
+        target[2] = static_cast<char>((messageSize >> 8) & 0xFF);
+        target[3] = static_cast<char>(messageSize & 0xFF);
 
-    // if (messageSize <= SEVEN_BITS_INTEGER_MARKER) {
-    //     dataFrameBuffer.push_back(firstByte);
-    //     dataFrameBuffer.push_back(static_cast<char>(messageSize));
-    // } else if (messageSize <= MAXIMUM_SIXTEEN_BITS_INTEGER) {
-    //     std::vector<char> target(4, 0);
-    //     target[0] = firstByte;
-    //     target[1] = SIXTEEN_BITS_INTEGER_MARKER;
-
-    //     target[2] = static_cast<char>((messageSize >> 8) & 0xFF);
-    //     target[3] = static_cast<char>(messageSize & 0xFF);
-
-    //     dataFrameBuffer = target;
-    // } else {
-    //     throw std::runtime_error("Message too long!");
-    // }
+        dataFrameBuffer = target;
+    } else {
+        throw std::runtime_error("Message too long!");
+    }
 
     int totalLength = dataFrameBuffer.size() + messageSize;
     std::string dataFrameResponse(dataFrameBuffer.begin(), dataFrameBuffer.end());
@@ -248,30 +220,37 @@ void sendMessage(const std::string& msg, const std::string& socket) {
     std::cout << "Sending message: " << data << " to socket: " << socket << std::endl;
 }
 
-void onSocketReadable(char *buffer) {
-    // // Simulate incoming data from socket
+std::string unmask(const std::vector<char>& encodedBuffer, const std::string& maskKey) {
+    std::vector<char> finalBuffer = encodedBuffer;
+
+    for (size_t index = 0; index < encodedBuffer.size(); ++index) {
+        finalBuffer[index] = encodedBuffer[index] ^ maskKey[index % MASK_KEY_BYTES_LENGTH];
+    }
+
+    std::string decoded(finalBuffer.begin(), finalBuffer.end());
+    return decoded;
+}
+
+void onSocketReadable(const std::string& socketData) {
+    // Simulate incoming data from socket
     std::vector<char> socketBuffer(socketData.begin(), socketData.end());
 
     // Simulate parsing of WebSocket frame
-    // char opcode = socketBuffer[0];
-    // char markerAndPayloadLength = socketBuffer[1];
+    char opcode = socketBuffer[0];
+    char markerAndPayloadLength = socketBuffer[1];
 
-    // char lengthIndicatorInBits = markerAndPayloadLength - FIRST_BIT;
+    char lengthIndicatorInBits = markerAndPayloadLength - FIRST_BIT;
 
-    // int messageLength = 0;
-    // if (lengthIndicatorInBits <= SEVEN_BITS_INTEGER_MARKER) {
-    //     messageLength = lengthIndicatorInBits;
-    // } else if (lengthIndicatorInBits == SIXTEEN_BITS_INTEGER_MARKER) {
-    //     messageLength = (socketBuffer[2] << 8) | socketBuffer[3];
-    // } else {
-    //     throw std::runtime_error("Message too long!");
-    // }
+    int messageLength = 0;
+    if (lengthIndicatorInBits <= SEVEN_BITS_INTEGER_MARKER) {
+        messageLength = lengthIndicatorInBits;
+    } else if (lengthIndicatorInBits == SIXTEEN_BITS_INTEGER_MARKER) {
+        messageLength = (socketBuffer[2] << 8) | socketBuffer[3];
+    } else {
+        throw std::runtime_error("Message too long!");
+    }
 
-    // fetch first 2 bytes of header
-    unsigned char octet0 = buffer.at(0);
-    unsigned char octet1 = buffer.at(1);
-
-    std::string maskKey(buffer.begin() + 2, bu.begin() + 6);
+    std::string maskKey(socketBuffer.begin() + 2, socketBuffer.begin() + 6);
     std::vector<char> encoded(socketBuffer.begin() + 6, socketBuffer.begin() + 6 + messageLength);
 
     // Simulated unmasking and decoding
@@ -282,17 +261,6 @@ void onSocketReadable(char *buffer) {
     // Simulated sending a response message
     std::string msg = "Response: " + decoded;
     sendMessage(msg, "client_socket");
-}
-
-std::string unmask(const std::vector<char>& encodedBuffer, const std::string& maskKey) {
-    std::vector<char> finalBuffer = encodedBuffer;
-
-    for (size_t index = 0; index < encodedBuffer.size(); ++index) {
-        finalBuffer[index] = encodedBuffer[index] ^ maskKey[index % MASK_KEY_BYTES_LENGTH];
-    }
-
-    std::string decoded(finalBuffer.begin(), finalBuffer.end());
-    return decoded;
 }
 
 void handleClient(int cfd)
