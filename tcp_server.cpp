@@ -256,6 +256,7 @@ std::string prepareMessage(const std::string& message) {
         // int left = totalLength;
         char *buf2 = buf;
         std::string frameData(buf, totalLength);
+        std::cout << "after frame data"<<std::endl;
         delete[] buf2;
         delete[] buf;
         result += frameData;

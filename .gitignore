@@ -3,5 +3,3 @@ client-side-websocket/
 tcp_server
 ws_select.cpp
 index.mjs
-websocket.h
-main.cpp
