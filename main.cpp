@@ -29,7 +29,7 @@ void closeHandler(int clientID){
 
     vector<int> clientIDs = server.getClientIDs();
     for (int i = 0; i < clientIDs.size(); i++){
-        if (clientIDs[i] != clientID)
+        if (clientIDs[i] == clientID)
             server.wsSend(clientIDs[i], os.str());
     }
 }
@@ -41,8 +41,25 @@ void messageHandler(int clientID, string message){
 
     vector<int> clientIDs = server.getClientIDs();
     for (int i = 0; i < clientIDs.size(); i++){
-        if (clientIDs[i] != clientID)
+        if (clientIDs[i] == clientID)
             server.wsSend(clientIDs[i], os.str());
+    }
+}
+
+void periodicHandler(){
+    static time_t next = time(NULL) + 10;
+    time_t current = time(NULL);
+    if (current >= next){
+        ostringstream os;
+        string timestring = ctime(&current);
+        timestring = timestring.substr(0, timestring.size() - 1);
+        os << timestring;
+
+        vector<int> clientIDs = server.getClientIDs();
+        for (int i = 0; i < clientIDs.size(); i++)
+            server.wsSend(clientIDs[i], os.str());
+
+        next = time(NULL) + 10;
     }
 }
 

@@ -571,6 +571,10 @@ void webSocket::setMessageHandler(messageCallback callback){
     callOnMessage = callback;
 }
 
+void webSocket::setPeriodicHandler(nullCallback callback){
+    callPeriodic = callback;
+}
+
 void webSocket::startServer(int port)
 {
 
@@ -625,7 +629,7 @@ void webSocket::startServer(int port)
     char buf[bfz];
     int nfds;
     int cfd;
-
+     cout<<"entered recv"<<'\n';
     for (;;)
     {
 
