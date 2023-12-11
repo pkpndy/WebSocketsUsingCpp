@@ -1,3 +1,3 @@
 # tcpSocketsUsingC
 
-use commands `make` and then `./wsServer` to run the server
+use commands `make` to compile and then `./wsServer` to run the server
