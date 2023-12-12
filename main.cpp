@@ -16,7 +16,7 @@ void openHandler(int clientID){
 
     vector<int> clientIDs = server.getClientIDs();
     for (int i = 0; i < clientIDs.size(); i++){
-        if (clientIDs[i] != clientID)
+        if (clientIDs[i] == clientID)
             server.wsSend(clientIDs[i], os.str());
     }
     server.wsSend(clientID, "Welcome!");
