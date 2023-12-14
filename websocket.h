@@ -115,7 +115,6 @@ private:
     int wsGetNextClientID();
     void wsAddClient(int socket, in_addr ip);
     char *base64_encode(const unsigned char *input, int length);
-    string base64_decode(std::string const& encoded_string);
 
     defaultCallback callOnOpen;
     defaultCallback callOnClose;

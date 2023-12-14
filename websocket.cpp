@@ -14,6 +14,8 @@
 #include <thread>
 #include <chrono>
 #include <math.h>
+#include <mutex>
+#include "base64.h"
 #include "websocket.h"
 
 using namespace std;
@@ -23,7 +25,6 @@ using namespace std;
 #define bfz 4096
 
 auto start = std::chrono::high_resolution_clock::now();
-
 
 char* webSocket::base64_encode(const unsigned char *input, int length)
 {
@@ -35,23 +36,6 @@ char* webSocket::base64_encode(const unsigned char *input, int length)
         std::cerr << "Whoops, encode predicted " << pl << " but we got " << ol << "\n";
     }
     return output;
-}
-
-std::string webSocket::base64_decode(std::string const& encoded_string)
-{
-    int length = encoded_string.size();
-    const char* c = encoded_string.c_str();
-    const unsigned char* input = reinterpret_cast<const unsigned char*>(c);
-    const int pl = 3 * length / 4;
-    unsigned char *output = (unsigned char *)calloc(pl + 1, 1);
-    const int ol = EVP_DecodeBlock(output, input, length);
-    if (pl != ol)
-    {
-        fprintf(stderr, "Whoops, decode predicted %d but we got %d\n", pl, ol);
-    }
-    size_t lengthOut = strlen(reinterpret_cast<char*>(output));
-    std::string str(reinterpret_cast<char*>(output), lengthOut);
-    return str;
 }
 
 vector<int> webSocket::getClientIDs(){
@@ -420,7 +404,6 @@ bool webSocket::wsBuildClientFrame(int clientID, char *buffer, int bufferLength)
 bool webSocket::wsProcessClientHandshake(int clientID, char *buffer){
     // fetch headers and request line
     string buf(buffer);
-    cout<<"request from client "<<clientID<<" "<< buffer<<"\n";
     size_t sep = buf.find("\r\n\r\n");
     if (sep == string::npos)
         return false;
@@ -487,8 +470,6 @@ bool webSocket::wsProcessClientHandshake(int clientID, char *buffer){
     ws_key.append("258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
     SHA1((unsigned char *)ws_key.c_str(), ws_key.size(), hash);
     string encoded_hash = base64_encode(hash, 20);
-    cout<<"handshake for client"<<clientID<<'\n';
-    cout<<encoded_hash<< '\n';
 
     string message = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ";
     message.append(encoded_hash);
@@ -524,7 +505,6 @@ bool webSocket::wsProcessClient(int clientID, char *buffer, int bufferLength){
         // handshake not completed
         result = wsProcessClientHandshake(clientID, buffer);
         if (result){
-            cout<<"Handshake successful for "<<clientID<<"\n";
             if (callOnOpen != NULL)
                 callOnOpen(clientID);
 

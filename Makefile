@@ -1,7 +1,7 @@
 CC = g++
 CFLAGS = -std=c++11 -Wall -c
 LDFLAGS = -lstdc++
-SOURCES = main.cpp websocket.cpp
+SOURCES = main.cpp websocket.cpp base64.cpp
 OBJECTS = $(SOURCES:.cpp=.o)
 EXECUTABLE = wsServer
 

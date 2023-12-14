@@ -1,8 +1,6 @@
 client-side-websocket/
 .vscode
-tcp_server
-ws_select.cpp
-index.mjs
 main.o
 websocket.o
+base64.o
 wsServer
