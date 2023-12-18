@@ -51,6 +51,7 @@ vector<int> webSocket::getClientIDs(){
 
 bool webSocket::wsSendClientMessage(int clientID, unsigned char opcode, string message){
     // check if client ready state is already closing or closed
+    cout<<"entered wsSendClientMessage"<<'\n';
     int clientArrSize = wsClients.size();
     if (clientID >= clientArrSize)
         return false;
@@ -62,7 +63,7 @@ bool webSocket::wsSendClientMessage(int clientID, unsigned char opcode, string m
     int messageLength = message.size();
 
     // set max payload length per frame
-    int bufferSize = 4096;
+    int bufferSize = 4000;
 
     // work out amount of frames to send, based on $bufferSize
     int frameCount = ceil((float)messageLength / bufferSize);
@@ -85,6 +86,7 @@ bool webSocket::wsSendClientMessage(int clientID, unsigned char opcode, string m
 
         // set payload length variables for frame
         if (bufferLength <= 125) {
+            cout<<"entered 8 bit message"<<'\n';
             // int payloadLength = bufferLength;
             totalLength = bufferLength + 2;
             buf = new char[totalLength];
@@ -93,6 +95,7 @@ bool webSocket::wsSendClientMessage(int clientID, unsigned char opcode, string m
             memcpy(buf+2, message.c_str(), message.size());
         }
         else if (bufferLength <= 65535) {
+                        cout<<"entered 16 bit message"<<'\n';
             // int payloadLength = WS_PAYLOAD_LENGTH_16;
             totalLength = bufferLength + 4;
             buf = new char[totalLength];
@@ -103,6 +106,7 @@ bool webSocket::wsSendClientMessage(int clientID, unsigned char opcode, string m
             memcpy(buf+4, message.c_str(), message.size());
         }
         else {
+            cout<<"entered 64 bit message"<<'\n';
             // int payloadLength = WS_PAYLOAD_LENGTH_63;
             totalLength = bufferLength + 10;
             buf = new char[totalLength];
@@ -118,21 +122,23 @@ bool webSocket::wsSendClientMessage(int clientID, unsigned char opcode, string m
             buf[9] = bufferLength;
             memcpy(buf+10, message.c_str(), message.size());
         }
-
+        cout<<"completed the buffer setting"<<'\n';
         // send frame
         int left = totalLength;
         char *buf2 = buf;
         do {
+            cout<<"inside the do while loop"<<'\n';
+            cout<<i<<"  "<<buf2<<'\n';
             int sent = send(wsClients[clientID]->socket, buf2, left, 0);
             if (sent == -1)
                 return false;
-
+            cout<<"before setting left-=sent"<<'\n';
             left -= sent;
             if (sent > 0)
                 buf2 += sent;
         }
         while (left > 0);
-
+        // cout<<i<<"  "<<buf<<'\n';
         delete buf;
     }
 
