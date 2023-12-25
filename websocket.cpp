@@ -50,68 +50,77 @@ vector<int> webSocket::getClientIDs(){
 }
 
 bool webSocket::wsSendClientMessage(int clientID, unsigned char opcode, string message) {
-    int clientArrSize = wsClients.size();
-    if (clientID >= clientArrSize)
-        return false;
-
-    if (wsClients[clientID]->ReadyState == WS_READY_STATE_CLOSING || wsClients[clientID]->ReadyState == WS_READY_STATE_CLOSED)
-        return true;
-
     int messageLength = message.size();
     int bufferSize = 4096;
-    int frameCount = ceil((float)messageLength / bufferSize);
+    int frameCount = ceil(static_cast<float>(messageLength) / bufferSize);
     if (frameCount == 0)
         frameCount = 1;
-
-    for (int i = 0; i < frameCount; i++) {
-        unsigned char fin = i != (frameCount - 1) ? 0 : WS_FIN;
-        opcode = i != 0 ? WS_OPCODE_CONTINUATION : opcode;
-
-        size_t bufferLength = i != (frameCount - 1) ? bufferSize : (messageLength % bufferSize != 0 ? messageLength % bufferSize : bufferSize);
+    if(opcode == WS_OPCODE_CLOSE || opcode == WS_STATUS_NORMAL_CLOSE){
+        unsigned char fin = WS_FIN;
+        size_t bufferLength = 0;
         size_t totalLength = bufferLength + 2 + (bufferLength > 125 ? (bufferLength > 65535 ? 8 : 2) : 0);
+        char *buff = new char[totalLength];
+        buff[0] = fin | opcode;
+        send(wsClients[clientID]->socket, buff, totalLength, 0);
+        delete[] buff;
+        return true;
+    }
+    for (const auto& client : wsClients) {
+        if (client->ReadyState == WS_READY_STATE_CLOSING || client->ReadyState == WS_READY_STATE_CLOSED)
+            continue;
 
-        char *buf = new char[totalLength];
-        buf[0] = fin | opcode;
+        for (int i = 0; i < frameCount; i++) {
+            unsigned char fin = i != (frameCount - 1) ? 0 : WS_FIN;
+            opcode = i != 0 ? WS_OPCODE_CONTINUATION : opcode;
 
-        if (bufferLength <= 125) {
-            buf[1] = bufferLength;
-            memcpy(buf + 2, message.c_str() + i * bufferSize, bufferLength);
-        } else if (bufferLength <= 65535) {
-            buf[1] = WS_PAYLOAD_LENGTH_16;
-            buf[2] = bufferLength >> 8;
-            buf[3] = bufferLength;
-            memcpy(buf + 4, message.c_str() + i * bufferSize, bufferLength);
-        } else {
-            buf[1] = WS_PAYLOAD_LENGTH_63;
-            buf[2] = 0;
-            buf[3] = 0;
-            buf[4] = 0;
-            buf[5] = 0;
-            buf[6] = bufferLength >> 24;
-            buf[7] = bufferLength >> 16;
-            buf[8] = bufferLength >> 8;
-            buf[9] = bufferLength;
-            memcpy(buf + 10, message.c_str() + i * bufferSize, bufferLength);
+            size_t bufferLength = i != (frameCount - 1) ? bufferSize : (messageLength % bufferSize != 0 ? messageLength % bufferSize : bufferSize);
+            size_t totalLength = bufferLength + 2 + (bufferLength > 125 ? (bufferLength > 65535 ? 8 : 2) : 0);
+
+            char *buf = new char[totalLength];
+            buf[0] = fin | opcode;
+
+            if (bufferLength <= 125) {
+                buf[1] = bufferLength;
+                memcpy(buf + 2, message.c_str() + i * bufferSize, bufferLength);
+            } else if (bufferLength <= 65535) {
+                buf[1] = WS_PAYLOAD_LENGTH_16;
+                buf[2] = bufferLength >> 8;
+                buf[3] = bufferLength;
+                memcpy(buf + 4, message.c_str() + i * bufferSize, bufferLength);
+            } else {
+                buf[1] = WS_PAYLOAD_LENGTH_63;
+                buf[2] = 0;
+                buf[3] = 0;
+                buf[4] = 0;
+                buf[5] = 0;
+                buf[6] = bufferLength >> 24;
+                buf[7] = bufferLength >> 16;
+                buf[8] = bufferLength >> 8;
+                buf[9] = bufferLength;
+                memcpy(buf + 10, message.c_str() + i * bufferSize, bufferLength);
+            }
+
+            int left = totalLength;
+            char *buf2 = buf;
+
+            do {
+                int sent = send(client->socket, buf2, left, 0);
+                if (sent == -1) {
+                    delete[] buf;
+                    return false;
+                }
+
+                left -= sent;
+                if (sent > 0)
+                    buf2 += sent;
+            } while (left > 0);
+
+            delete[] buf;
         }
-
-        int left = totalLength;
-        char *buf2 = buf;
-        do {
-            int sent = send(wsClients[clientID]->socket, buf2, left, 0);
-            if (sent == -1)
-                return false;
-
-            left -= sent;
-            if (sent > 0)
-                buf2 += sent;
-        } while (left > 0);
-
-        delete[] buf;
     }
 
     return true;
 }
-
 
 bool webSocket::wsSend(int clientID, string message, bool binary){
     return wsSendClientMessage(clientID, binary ? WS_OPCODE_BINARY : WS_OPCODE_TEXT, message);

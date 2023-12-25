@@ -25,7 +25,7 @@ void openHandler(int clientID){
 /* called when a client disconnects */
 void closeHandler(int clientID){
     ostringstream os;
-    os << "Stranger " << clientID << " has leaved.";
+    os << "Stranger " << clientID << " has left.";
 
     vector<int> clientIDs = server.getClientIDs();
     for (int i = 0; i < clientIDs.size(); i++){
