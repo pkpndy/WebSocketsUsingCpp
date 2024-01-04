@@ -15,7 +15,8 @@
 #include <chrono>
 #include <math.h>
 #include <mutex>
-#include <algorithm>
+#include <vector>
+#include <random>
 #include "base64.h"
 #include "websocket.h"
 
@@ -41,8 +42,8 @@ char* webSocket::base64_encode(const unsigned char *input, int length)
 
 vector<int> webSocket::getClientIDs(){
     vector<int> clientIDs;
-    int clientListSize = wsClients.size();
-    for (int i = 0; i < clientListSize; i++){
+    int clientArrSize = wsClients.size();
+    for (int i = 0; i < clientArrSize; i++){
         if (wsClients[i] != NULL)
             clientIDs.push_back(i);
     }
@@ -213,31 +214,31 @@ void webSocket::wsRemoveClient(int clientID){
     if (callOnClose != NULL)
         callOnClose(clientID);
 
-    // wsClient *client = wsClients[clientID];
-    int clientPos = 0;
-    for(auto it: wsClients){
-        if((*it)->  == clientID)
+    wsClient *client;
+    auto it = IDClientMap.find(clientID);
+    if (it != IDClientMap.end()){
+        client = it -> second;
     }
-    auto it = next(wsClients.begin(), clientPos);
 
     // fetch close status (which could be false), and call wsOnClose
     // int closeStatus = wsClients[clientID]->CloseStatus;
 
     // close socket
-    // close(client->socket);
-    close((*it)->socket);
+    close(client->socket);
+    // close(it->second->socket);
 
-    // socketIDmap.erase(wsClients[clientID]->socket);
-    for (auto it = wsClients.begin(); it != wsClients.end(); ++it) {
-    if ((*it)->socket) {
-        socketIDmap.erase((*it)->socket);
-        break;
-    }
-}
-    // wsClients[clientID] = NULL;
-    wsClients.erase(it);
+    socketIDmap.erase(client->socket);
+    // for erasing the client from the vector find the client index in the vector then erase it
+    // auto at = wsClients.find(clientID);
+    auto at = find(wsClients.begin(), wsClients.end(), clientID);
+    wsClients.erase(at);
+    IDClientMap.erase(it);
     delete client;
 }
+
+//if using a function that generates unique id
+//find that id in client id map if it's found
+// again call the function
 
 bool webSocket::wsProcessClientMessage(int clientID, unsigned char opcode, string data, int dataLength){
     wsClient *client = wsClients[clientID];
@@ -515,8 +516,8 @@ bool webSocket::wsProcessClientHandshake(int clientID, char *buffer){
 
 bool webSocket::wsProcessClient(int clientID, char *buffer, int bufferLength){
     bool result;
-    int clientListSize = wsClients.size();
-    if (clientID >= clientListSize || wsClients[clientID] == NULL)
+    int clientArrSize = wsClients.size();
+    if (clientID >= clientArrSize || wsClients[clientID] == NULL)
         return false;
 
     if (wsClients[clientID]->ReadyState == WS_READY_STATE_OPEN){
@@ -542,23 +543,25 @@ bool webSocket::wsProcessClient(int clientID, char *buffer, int bufferLength){
 }
 
 int webSocket::wsGetNextClientID() {
-    int i = 0;
-    for (auto it = wsClients.begin(); it != wsClients.end(); ++it) {
-        if (*it == nullptr) {
-            break;
-        }
-        ++i;
-    }
-    return i;
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(1, 1000000);
+    int newID = dis(gen);
+    return newID;
 }
 
 void webSocket::wsAddClient(int socket, in_addr ip){
     int clientID = wsGetNextClientID();
-    // wsClient *newClient = new wsClient(socket, ip);
-    shared_ptr<wsClient> newClient = make_shared<wsClient>(socket, ip);
-    int clientListSize = wsClients.size();
-    wsClients.push_back(newClient);
+     wsClient *newClient = new wsClient(socket, ip);
+    int clientArrSize = wsClients.size();
+    if (clientID >= clientArrSize){
+        wsClients.push_back(newClient);
+    }
+    else {
+        wsClients[clientID] = newClient;
+    }
     socketIDmap[socket] = clientID;
+    IDClientMap[clientID] = newClient;
 }
 
 void webSocket::setOpenHandler(defaultCallback callback){

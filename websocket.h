@@ -7,9 +7,6 @@
 
 #include <string>
 #include <vector>
-#include <unordered_map>
-#include <memory>
-#include <list>
 #include <map>
 #include <time.h>
 
@@ -99,13 +96,12 @@ public:
     vector<int> getClientIDs();
     string getClientIP(int clientID);
 private:
-    list<wsClient *> wsClients;
+    vector<wsClient *> wsClients;
+    map<int, wsClient*> IDClientMap;
     map<int, int> socketIDmap;
     fd_set fds;
     int fdmax;
     int listenfd;
-    std::unordered_map<int, std::shared_ptr<wsClient>> wsClientsMap;
-    int nextClientID = 0;
 
     void wsCheckIdleClients();
     bool wsSendClientMessage(int clientID, unsigned char opcode, string message);
