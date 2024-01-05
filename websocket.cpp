@@ -40,6 +40,18 @@ char* webSocket::base64_encode(const unsigned char *input, int length)
     return output;
 }
 
+/*
+
+
+
+the way clients were handled is to be changed as earlier we used index as the clientID
+but now IDs are unique so different approach has to be taken
+
+
+
+
+*/
+
 vector<int> webSocket::getClientIDs(){
     vector<int> clientIDs;
     int clientArrSize = wsClients.size();
@@ -210,30 +222,53 @@ bool webSocket::wsCheckSizeClientFrame(int clientID){
     return false;
 }
 
-void webSocket::wsRemoveClient(int clientID){
+// void webSocket::wsRemoveClient(int clientID){
+//     if (callOnClose != NULL)
+//         callOnClose(clientID);
+
+//     wsClient *client;
+//     auto it = IDClientMap.find(clientID);
+//     if (it != IDClientMap.end()){
+//         client = it -> second;
+//     }
+
+//     // fetch close status (which could be false), and call wsOnClose
+//     // int closeStatus = wsClients[clientID]->CloseStatus;
+
+//     // close socket
+//     close(client->socket);
+
+//     socketIDmap.erase(client->socket);
+//     // for erasing the client from the vector find the client index in the vector then erase it
+//     // auto at = wsClients.find(clientID);
+
+//     if (it != IDClientMap.end()) {
+//         int index = distance(IDClientMap.begin(), it); // Dereferencing the iterator to get the pointer to the client
+//         wsClients.erase(wsClients.begin() + index);
+//     }
+//     IDClientMap.erase(clientID);
+//     delete client;
+// }
+
+void webSocket::wsRemoveClient(int clientID) {
     if (callOnClose != NULL)
         callOnClose(clientID);
 
-    wsClient *client;
     auto it = IDClientMap.find(clientID);
-    if (it != IDClientMap.end()){
-        client = it -> second;
+    if (it != IDClientMap.end()) {
+        wsClient *client = it->second;
+
+        // close socket
+        if (client != nullptr) {
+            close(client->socket);
+            socketIDmap.erase(client->socket);
+        }
+
+        int index = distance(IDClientMap.begin(), it);
+        wsClients.erase(wsClients.begin() + index);
+        IDClientMap.erase(clientID);
+        delete client;
     }
-
-    // fetch close status (which could be false), and call wsOnClose
-    // int closeStatus = wsClients[clientID]->CloseStatus;
-
-    // close socket
-    close(client->socket);
-    // close(it->second->socket);
-
-    socketIDmap.erase(client->socket);
-    // for erasing the client from the vector find the client index in the vector then erase it
-    // auto at = wsClients.find(clientID);
-    auto at = find(wsClients.begin(), wsClients.end(), clientID);
-    wsClients.erase(at);
-    IDClientMap.erase(it);
-    delete client;
 }
 
 //if using a function that generates unique id
@@ -554,12 +589,7 @@ void webSocket::wsAddClient(int socket, in_addr ip){
     int clientID = wsGetNextClientID();
      wsClient *newClient = new wsClient(socket, ip);
     int clientArrSize = wsClients.size();
-    if (clientID >= clientArrSize){
-        wsClients.push_back(newClient);
-    }
-    else {
-        wsClients[clientID] = newClient;
-    }
+    wsClients.push_back(newClient);
     socketIDmap[socket] = clientID;
     IDClientMap[clientID] = newClient;
 }
