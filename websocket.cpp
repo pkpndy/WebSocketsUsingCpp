@@ -15,8 +15,6 @@
 #include <chrono>
 #include <math.h>
 #include <mutex>
-#include <vector>
-#include <random>
 #include "base64.h"
 #include "websocket.h"
 
@@ -40,18 +38,6 @@ char* webSocket::base64_encode(const unsigned char *input, int length)
     return output;
 }
 
-/*
-
-
-
-the way clients were handled is to be changed as earlier we used index as the clientID
-but now IDs are unique so different approach has to be taken
-
-
-
-
-*/
-
 vector<int> webSocket::getClientIDs(){
     vector<int> clientIDs;
     int clientArrSize = wsClients.size();
@@ -69,20 +55,16 @@ bool webSocket::wsSendClientMessage(int clientID, unsigned char opcode, string m
     int frameCount = ceil(static_cast<float>(messageLength) / bufferSize);
     if (frameCount == 0)
         frameCount = 1;
-
-    //instead of using this if here and getting in the problem of
-    // reaching null place in the vector
-    //we can take this logic to the close function
-    // if(opcode == WS_OPCODE_CLOSE || opcode == WS_STATUS_NORMAL_CLOSE){
-    //     unsigned char fin = WS_FIN;
-    //     size_t bufferLength = 0;
-    //     size_t totalLength = bufferLength + 2 + (bufferLength > 125 ? (bufferLength > 65535 ? 8 : 2) : 0);
-    //     char *buff = new char[totalLength];
-    //     buff[0] = fin | opcode;
-    //     send(wsClients[clientID]->socket, buff, totalLength, 0);
-    //     delete[] buff;
-    //     return true;
-    // }
+    if(opcode == WS_OPCODE_CLOSE || opcode == WS_STATUS_NORMAL_CLOSE){
+        unsigned char fin = WS_FIN;
+        size_t bufferLength = 0;
+        size_t totalLength = bufferLength + 2 + (bufferLength > 125 ? (bufferLength > 65535 ? 8 : 2) : 0);
+        char *buff = new char[totalLength];
+        buff[0] = fin | opcode;
+        send(wsClients[clientID]->socket, buff, totalLength, 0);
+        delete[] buff;
+        return true;
+    }
     for (const auto& client : wsClients) {
         if (client->ReadyState == WS_READY_STATE_CLOSING || client->ReadyState == WS_READY_STATE_CLOSED)
             continue;
@@ -153,28 +135,14 @@ void webSocket::wsSendClientClose(int clientID, unsigned short status){
     wsClients[clientID]->ReadyState = status;
 
     // send close frame to client
-    // wsSendClientMessage(clientID, WS_OPCODE_CLOSE, "");
-    unsigned char fin = WS_FIN;
-    size_t bufferLength = 0;
-    size_t totalLength = bufferLength + 2 + (bufferLength > 125 ? (bufferLength > 65535 ? 8 : 2) : 0);
-    char *buff = new char[totalLength];
-    buff[0] = fin | WS_OPCODE_CLOSE;
-    send(wsClients[clientID]->socket, buff, totalLength, 0);
-    delete[] buff;
+    wsSendClientMessage(clientID, WS_OPCODE_CLOSE, "");
 
     // set client ready state to closing
     wsClients[clientID]->ReadyState = WS_READY_STATE_CLOSING;
 }
 
 void webSocket::wsClose(int clientID){
-    // wsSendClientClose(clientID, WS_STATUS_NORMAL_CLOSE);
-    unsigned char fin = WS_FIN;
-        size_t bufferLength = 0;
-        size_t totalLength = bufferLength + 2 + (bufferLength > 125 ? (bufferLength > 65535 ? 8 : 2) : 0);
-        char *buff = new char[totalLength];
-        buff[0] = fin | WS_STATUS_NORMAL_CLOSE;
-        send(wsClients[clientID]->socket, buff, totalLength, 0);
-        delete[] buff;
+    wsSendClientClose(clientID, WS_STATUS_NORMAL_CLOSE);
 }
 
 bool webSocket::wsCheckSizeClientFrame(int clientID){
@@ -222,58 +190,22 @@ bool webSocket::wsCheckSizeClientFrame(int clientID){
     return false;
 }
 
-// void webSocket::wsRemoveClient(int clientID){
-//     if (callOnClose != NULL)
-//         callOnClose(clientID);
-
-//     wsClient *client;
-//     auto it = IDClientMap.find(clientID);
-//     if (it != IDClientMap.end()){
-//         client = it -> second;
-//     }
-
-//     // fetch close status (which could be false), and call wsOnClose
-//     // int closeStatus = wsClients[clientID]->CloseStatus;
-
-//     // close socket
-//     close(client->socket);
-
-//     socketIDmap.erase(client->socket);
-//     // for erasing the client from the vector find the client index in the vector then erase it
-//     // auto at = wsClients.find(clientID);
-
-//     if (it != IDClientMap.end()) {
-//         int index = distance(IDClientMap.begin(), it); // Dereferencing the iterator to get the pointer to the client
-//         wsClients.erase(wsClients.begin() + index);
-//     }
-//     IDClientMap.erase(clientID);
-//     delete client;
-// }
-
-void webSocket::wsRemoveClient(int clientID) {
+void webSocket::wsRemoveClient(int clientID){
     if (callOnClose != NULL)
         callOnClose(clientID);
 
-    auto it = IDClientMap.find(clientID);
-    if (it != IDClientMap.end()) {
-        wsClient *client = it->second;
+    wsClient *client = wsClients[clientID];
 
-        // close socket
-        if (client != nullptr) {
-            close(client->socket);
-            socketIDmap.erase(client->socket);
-        }
+    // fetch close status (which could be false), and call wsOnClose
+    // int closeStatus = wsClients[clientID]->CloseStatus;
 
-        int index = distance(IDClientMap.begin(), it);
-        wsClients.erase(wsClients.begin() + index);
-        IDClientMap.erase(clientID);
-        delete client;
-    }
+    // close socket
+    close(client->socket);
+
+    socketIDmap.erase(wsClients[clientID]->socket);
+    wsClients[clientID] = NULL;
+    delete client;
 }
-
-//if using a function that generates unique id
-//find that id in client id map if it's found
-// again call the function
 
 bool webSocket::wsProcessClientMessage(int clientID, unsigned char opcode, string data, int dataLength){
     wsClient *client = wsClients[clientID];
@@ -297,14 +229,7 @@ bool webSocket::wsProcessClientMessage(int clientID, unsigned char opcode, strin
         }
         else {
             // the server has not already sent a close frame to the client, send one now
-            // wsSendClientClose(clientID, WS_STATUS_NORMAL_CLOSE);
-            unsigned char fin = WS_FIN;
-            size_t bufferLength = 0;
-            size_t totalLength = bufferLength + 2 + (bufferLength > 125 ? (bufferLength > 65535 ? 8 : 2) : 0);
-            char *buff = new char[totalLength];
-            buff[0] = fin | WS_STATUS_NORMAL_CLOSE;
-            send(wsClients[clientID]->socket, buff, totalLength, 0);
-            delete[] buff;
+            wsSendClientClose(clientID, WS_STATUS_NORMAL_CLOSE);
         }
 
         wsRemoveClient(clientID);
@@ -577,21 +502,27 @@ bool webSocket::wsProcessClient(int clientID, char *buffer, int bufferLength){
     return result;
 }
 
-int webSocket::wsGetNextClientID() {
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<> dis(1, 1000000);
-    int newID = dis(gen);
-    return newID;
+int webSocket::wsGetNextClientID(){
+    int i;
+    int clientArrSize = wsClients.size();
+    for (i = 0; i < clientArrSize; i++){
+        if (wsClients[i] == NULL)
+            break;
+    }
+    return i;
 }
 
 void webSocket::wsAddClient(int socket, in_addr ip){
     int clientID = wsGetNextClientID();
-     wsClient *newClient = new wsClient(socket, ip);
+    wsClient *newClient = new wsClient(socket, ip);
     int clientArrSize = wsClients.size();
-    wsClients.push_back(newClient);
+    if (clientID >= clientArrSize){
+        wsClients.push_back(newClient);
+    }
+    else {
+        wsClients[clientID] = newClient;
+    }
     socketIDmap[socket] = clientID;
-    IDClientMap[clientID] = newClient;
 }
 
 void webSocket::setOpenHandler(defaultCallback callback){

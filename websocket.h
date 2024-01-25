@@ -97,7 +97,6 @@ public:
     string getClientIP(int clientID);
 private:
     vector<wsClient *> wsClients;
-    map<int, wsClient*> IDClientMap;
     map<int, int> socketIDmap;
     fd_set fds;
     int fdmax;
