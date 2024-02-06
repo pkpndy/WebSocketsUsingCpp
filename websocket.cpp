@@ -24,7 +24,7 @@ using namespace std;
 #define WS_FIN 128
 #define bfz 4096
 
-auto start = std::chrono::high_resolution_clock::now();
+auto start = chrono::high_resolution_clock::now();
 
 char* webSocket::base64_encode(const unsigned char *input, int length)
 {
@@ -33,7 +33,7 @@ char* webSocket::base64_encode(const unsigned char *input, int length)
     const auto ol = EVP_EncodeBlock(reinterpret_cast<unsigned char *>(output), input, length);
     if (pl != ol)
     {
-        std::cerr << "Whoops, encode predicted " << pl << " but we got " << ol << "\n";
+        cerr << "Whoops, encode predicted " << pl << " but we got " << ol << "\n";
     }
     return output;
 }
@@ -55,75 +55,71 @@ bool webSocket::wsSendClientMessage(int clientID, unsigned char opcode, string m
     int frameCount = ceil(static_cast<float>(messageLength) / bufferSize);
     if (frameCount == 0)
         frameCount = 1;
-    if(opcode == WS_OPCODE_CLOSE || opcode == WS_STATUS_NORMAL_CLOSE){
-        unsigned char fin = WS_FIN;
-        size_t bufferLength = 0;
-        size_t totalLength = bufferLength + 2 + (bufferLength > 125 ? (bufferLength > 65535 ? 8 : 2) : 0);
-        char *buff = new char[totalLength];
-        buff[0] = fin | opcode;
-        send(wsClients[clientID]->socket, buff, totalLength, 0);
-        delete[] buff;
+
+    if (wsClients[clientID]->ReadyState == WS_READY_STATE_CLOSING || wsClients[clientID]->ReadyState == WS_READY_STATE_CLOSED)
         return true;
-    }
-    for (const auto& client : wsClients) {
-        if (client->ReadyState == WS_READY_STATE_CLOSING || client->ReadyState == WS_READY_STATE_CLOSED)
-            continue;
 
-        for (int i = 0; i < frameCount; i++) {
-            unsigned char fin = i != (frameCount - 1) ? 0 : WS_FIN;
-            opcode = i != 0 ? WS_OPCODE_CONTINUATION : opcode;
+    for (int i = 0; i < frameCount; i++) {
+        unsigned char fin = i != (frameCount - 1) ? 0 : WS_FIN;
+        opcode = i != 0 ? WS_OPCODE_CONTINUATION : opcode;
 
-            size_t bufferLength = i != (frameCount - 1) ? bufferSize : (messageLength % bufferSize != 0 ? messageLength % bufferSize : bufferSize);
-            size_t totalLength = bufferLength + 2 + (bufferLength > 125 ? (bufferLength > 65535 ? 8 : 2) : 0);
+        size_t bufferLength = i != (frameCount - 1) ? bufferSize : (messageLength % bufferSize != 0 ? messageLength % bufferSize : bufferSize);
+        size_t totalLength = bufferLength + 2 + (bufferLength > 125 ? (bufferLength > 65535 ? 8 : 2) : 0);
 
-            char *buf = new char[totalLength];
-            buf[0] = fin | opcode;
+        char *buf = new char[totalLength];
+        buf[0] = fin | opcode;
 
-            if (bufferLength <= 125) {
-                buf[1] = bufferLength;
-                memcpy(buf + 2, message.c_str() + i * bufferSize, bufferLength);
-            } else if (bufferLength <= 65535) {
-                buf[1] = WS_PAYLOAD_LENGTH_16;
-                buf[2] = bufferLength >> 8;
-                buf[3] = bufferLength;
-                memcpy(buf + 4, message.c_str() + i * bufferSize, bufferLength);
-            } else {
-                buf[1] = WS_PAYLOAD_LENGTH_63;
-                buf[2] = 0;
-                buf[3] = 0;
-                buf[4] = 0;
-                buf[5] = 0;
-                buf[6] = bufferLength >> 24;
-                buf[7] = bufferLength >> 16;
-                buf[8] = bufferLength >> 8;
-                buf[9] = bufferLength;
-                memcpy(buf + 10, message.c_str() + i * bufferSize, bufferLength);
+        if (bufferLength <= 125) {
+            buf[1] = bufferLength;
+            memcpy(buf + 2, message.c_str() + i * bufferSize, bufferLength);
+        } else if (bufferLength <= 65535) {
+            buf[1] = WS_PAYLOAD_LENGTH_16;
+            buf[2] = bufferLength >> 8;
+            buf[3] = bufferLength;
+            memcpy(buf + 4, message.c_str() + i * bufferSize, bufferLength);
+        } else {
+            buf[1] = WS_PAYLOAD_LENGTH_63;
+            buf[2] = 0;
+            buf[3] = 0;
+            buf[4] = 0;
+            buf[5] = 0;
+            buf[6] = bufferLength >> 24;
+            buf[7] = bufferLength >> 16;
+            buf[8] = bufferLength >> 8;
+            buf[9] = bufferLength;
+            memcpy(buf + 10, message.c_str() + i * bufferSize, bufferLength);
+        }
+
+        int left = totalLength;
+        char *buf2 = buf;
+
+        do {
+            int sent = send(wsClients[clientID]->socket, buf2, left, 0);
+            if (sent == -1) {
+                delete[] buf;
+                return false;
             }
 
-            int left = totalLength;
-            char *buf2 = buf;
+            left -= sent;
+            if (sent > 0)
+                buf2 += sent;
+        } while (left > 0);
 
-            do {
-                int sent = send(client->socket, buf2, left, 0);
-                if (sent == -1) {
-                    delete[] buf;
-                    return false;
-                }
-
-                left -= sent;
-                if (sent > 0)
-                    buf2 += sent;
-            } while (left > 0);
-
-            delete[] buf;
-        }
+        delete[] buf;
     }
+
 
     return true;
 }
 
 bool webSocket::wsSend(int clientID, string message, bool binary){
-    return wsSendClientMessage(clientID, binary ? WS_OPCODE_BINARY : WS_OPCODE_TEXT, message);
+    cout<<"wsSend"<<endl;
+    for (int i = 0; i < wsClients.size(); i++){
+        if (wsClients[i] == NULL)    continue;
+        bool result = wsSendClientMessage(i, binary ? WS_OPCODE_BINARY : WS_OPCODE_TEXT, message);
+        if(result == false) return false;
+    }
+    return true;
 }
 
 void webSocket::wsSendClientClose(int clientID, unsigned short status){
@@ -135,7 +131,14 @@ void webSocket::wsSendClientClose(int clientID, unsigned short status){
     wsClients[clientID]->ReadyState = status;
 
     // send close frame to client
-    wsSendClientMessage(clientID, WS_OPCODE_CLOSE, "");
+    // wsSendClientMessage(clientID, WS_OPCODE_CLOSE, "");
+    unsigned char fin = WS_FIN;
+    size_t bufferLength = 0;
+    size_t totalLength = bufferLength + 2 + (bufferLength > 125 ? (bufferLength > 65535 ? 8 : 2) : 0);
+    char *buff = new char[totalLength];
+    buff[0] = fin | WS_OPCODE_CLOSE;
+    send(wsClients[clientID]->socket, buff, totalLength, 0);
+    delete[] buff;
 
     // set client ready state to closing
     wsClients[clientID]->ReadyState = WS_READY_STATE_CLOSING;
@@ -159,7 +162,7 @@ bool webSocket::wsCheckSizeClientFrame(int clientID){
         else if (payloadLength == 126){
             // actual payload length is <= 65,535
             if (client->FrameBuffer.size() >= 4){
-                std::vector<unsigned char> length_bytes;
+                vector<unsigned char> length_bytes;
                 length_bytes.resize(2);
                 memcpy((char*)&length_bytes[0], client->FrameBuffer.substr(2, 2).c_str(), 2);
 
@@ -172,7 +175,7 @@ bool webSocket::wsCheckSizeClientFrame(int clientID){
         }
         else {
             if (client->FrameBuffer.size() >= 10){
-                std::vector<unsigned char> length_bytes;
+                vector<unsigned char> length_bytes;
                 length_bytes.resize(8);
                 memcpy((char*)&length_bytes[0], client->FrameBuffer.substr(2, 8).c_str(), 8);
 
@@ -189,7 +192,6 @@ bool webSocket::wsCheckSizeClientFrame(int clientID){
 
     return false;
 }
-
 void webSocket::wsRemoveClient(int clientID){
     if (callOnClose != NULL)
         callOnClose(clientID);
@@ -302,7 +304,6 @@ bool webSocket::wsProcessClientFrame(int clientID){
         else {
             // increase message payload data length
             client->MessageBufferLength += client->FramePayloadDataLength;
-
             // push frame payload data onto message buffer
             client->MessageBuffer.append(data);
 
@@ -544,7 +545,7 @@ void webSocket::setPeriodicHandler(nullCallback callback){
 void webSocket::startServer(int port)
 {
 
-    std::cout << "TCP server started" << std::endl;
+    cout << "TCP server started" << endl;
 
     // Creating Socket
     int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
@@ -554,7 +555,7 @@ void webSocket::startServer(int port)
     struct sockaddr_in address;
     int addresslen = sizeof(address);
 
-    std::cout << "Creating socket" << std::endl;
+    cout << "Creating socket" << endl;
 
     if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt)) == -1){
         perror("setsockopt() error!");
@@ -614,7 +615,7 @@ void webSocket::startServer(int port)
             else if (evlist[i].data.fd == serverSocket)
             {
 
-                start = std::chrono::high_resolution_clock::now();
+                start = chrono::high_resolution_clock::now();
 
                 // accept
                 cfd = accept(serverSocket, (struct sockaddr *)&clientAddress, (socklen_t *)&addresslen);
@@ -639,21 +640,21 @@ void webSocket::startServer(int port)
                         if (socketIDmap.find(clientFd) != socketIDmap.end()){
                             if (nbytes < 0)
                                 wsSendClientClose(socketIDmap[clientFd], WS_STATUS_PROTOCOL_ERROR);
-                            else if (nbytes == 0)
+                            else if (nbytes == 0){
                                 wsRemoveClient(socketIDmap[clientFd]);
+                                epoll_ctl(epfd, EPOLL_CTL_DEL, clientFd, NULL);
+                            }
                             else {
                                 if (!wsProcessClient(socketIDmap[clientFd], buf, nbytes))
                                     wsSendClientClose(socketIDmap[clientFd], WS_STATUS_PROTOCOL_ERROR);
                             }
                         }
-                // std::thread clientThread(handleClient, clientFd);
-                // clientThread.detach();
             }
         }
 
     }
 
     // closing the listening socket
-    shutdown(serverSocket, SHUT_RDWR);
+    // shutdown(serverSocket, SHUT_RDWR);
 
 }

@@ -1,6 +1,6 @@
 CC = g++
-CFLAGS = -std=c++11 -Wall -c
-LDFLAGS = -lstdc++
+CFLAGS = -std=c++11 -Wall -c -g -fsanitize=address
+LDFLAGS = -lstdc++ -fsanitize=address
 SOURCES = main.cpp websocket.cpp base64.cpp
 OBJECTS = $(SOURCES:.cpp=.o)
 EXECUTABLE = wsServer
