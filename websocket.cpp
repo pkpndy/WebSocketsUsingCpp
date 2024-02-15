@@ -113,7 +113,6 @@ bool webSocket::wsSendClientMessage(int clientID, unsigned char opcode, string m
 }
 
 bool webSocket::wsSend(int clientID, string message, bool binary){
-    cout<<"wsSend"<<endl;
     for (int i = 0; i < wsClients.size(); i++){
         if (wsClients[i] == NULL)    continue;
         bool result = wsSendClientMessage(i, binary ? WS_OPCODE_BINARY : WS_OPCODE_TEXT, message);
