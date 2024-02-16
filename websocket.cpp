@@ -637,15 +637,17 @@ void webSocket::startServer(int port)
 
                 int nbytes = recv(clientFd, buf, sizeof(buf), 0);
                         if (socketIDmap.find(clientFd) != socketIDmap.end()){
-                            if (nbytes < 0)
+                            if (nbytes < 0){
                                 wsSendClientClose(socketIDmap[clientFd], WS_STATUS_PROTOCOL_ERROR);
-                            else if (nbytes == 0){
+                                close(clientFd);
+                            }else if (nbytes == 0){
                                 wsRemoveClient(socketIDmap[clientFd]);
                                 epoll_ctl(epfd, EPOLL_CTL_DEL, clientFd, NULL);
-                            }
-                            else {
-                                if (!wsProcessClient(socketIDmap[clientFd], buf, nbytes))
+                            }else {
+                                if (!wsProcessClient(socketIDmap[clientFd], buf, nbytes)){
                                     wsSendClientClose(socketIDmap[clientFd], WS_STATUS_PROTOCOL_ERROR);
+                                    close(clientFd);
+                                }
                             }
                         }
             }
