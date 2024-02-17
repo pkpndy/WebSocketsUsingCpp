@@ -1,4 +1,4 @@
-client-side-websocket/
+client-side-websocket/node_modules
 .vscode
 main.o
 websocket.o
