@@ -556,7 +556,7 @@ void webSocket::startServer(int port)
 
     cout << "Creating socket" << endl;
 
-    if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt)) == -1){
+    if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1){
         perror("setsockopt() error!");
         exit(1);
     }
@@ -655,7 +655,20 @@ void webSocket::startServer(int port)
 
     }
 
-    // closing the listening socket
-    // shutdown(serverSocket, SHUT_RDWR);
+}
 
+void webSocket::stopServer(){
+    for (int i = 0; i < wsClients.size(); i++){
+        if (wsClients[i] != NULL){
+            if (wsClients[i]->ReadyState != WS_READY_STATE_CONNECTING)
+                wsSendClientClose(i, WS_STATUS_GONE_AWAY);
+
+            close(wsClients[i]->socket);
+        }
+    }
+    close(listenfd);
+
+    wsClients.clear();
+    socketIDmap.clear();
+    fdmax = 0;
 }
