@@ -191,6 +191,7 @@ bool webSocket::wsCheckSizeClientFrame(int clientID){
 
     return false;
 }
+
 void webSocket::wsRemoveClient(int clientID){
     if (callOnClose != NULL)
         callOnClose(clientID);
@@ -556,7 +557,7 @@ void webSocket::startServer(int port)
 
     cout << "Creating socket" << endl;
 
-    if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1){
+    if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt)) == -1){
         perror("setsockopt() error!");
         exit(1);
     }
@@ -618,7 +619,10 @@ void webSocket::startServer(int port)
 
                 // accept
                 cfd = accept(serverSocket, (struct sockaddr *)&clientAddress, (socklen_t *)&addresslen);
-
+                if (setsockopt(cfd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt)) == -1) {
+                    perror("setsockopt() error!");
+                    close(cfd); // Close the socket if setting options fails
+                }
                 // epoll_ctl
                 ev.events = EPOLLIN;
                 ev.data.fd = cfd;
@@ -667,7 +671,11 @@ void webSocket::stopServer(){
         }
     }
     close(listenfd);
-
+    for (int i = 0; i < wsClients.size(); i++){
+        if (wsClients[i] == NULL)    continue;
+        delete wsClients[i];
+        wsClients[i] = nullptr;
+    }
     wsClients.clear();
     socketIDmap.clear();
     fdmax = 0;
