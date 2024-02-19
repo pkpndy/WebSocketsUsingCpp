@@ -11,10 +11,7 @@
 #include <iostream>
 #include <openssl/sha.h>
 #include <openssl/evp.h>
-#include <thread>
 #include <chrono>
-#include <math.h>
-#include <mutex>
 #include "base64.h"
 #include "websocket.h"
 
@@ -47,6 +44,32 @@ vector<int> webSocket::getClientIDs(){
     }
 
     return clientIDs;
+}
+
+string webSocket::getClientIP(int clientID){
+    return string(inet_ntoa(wsClients[clientID]->addr));
+}
+
+void webSocket::wsCheckIdleClients(){
+    time_t current = time(NULL);
+    for (int i = 0; i < wsClients.size(); i++){
+        if (wsClients[i] != NULL && wsClients[i]->ReadyState != WS_READY_STATE_CLOSED){
+            if (wsClients[i]->PingSentTime != 0){
+                if (difftime(current, wsClients[i]->PingSentTime) >= WS_TIMEOUT_PONG){
+                    wsSendClientClose(i, WS_STATUS_TIMEOUT);
+                    wsRemoveClient(i);
+                }
+            }
+            else if (difftime(current, wsClients[i]->LastRecvTime) != WS_TIMEOUT_RECV){
+                if (wsClients[i]->ReadyState != WS_READY_STATE_CONNECTING) {
+                    wsClients[i]->PingSentTime = time(NULL);
+                    wsSendClientMessage(i, WS_OPCODE_PING, "");
+                }
+                else
+                    wsRemoveClient(i);
+            }
+        }
+    }
 }
 
 bool webSocket::wsSendClientMessage(int clientID, unsigned char opcode, string message) {
