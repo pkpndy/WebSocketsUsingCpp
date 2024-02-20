@@ -4,11 +4,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <vector>
 #include <algorithm>
 #include <sys/epoll.h>
 #include <signal.h>
 #include <iostream>
+#include <math.h>
 #include <openssl/sha.h>
 #include <openssl/evp.h>
 #include <chrono>
@@ -153,7 +153,6 @@ void webSocket::wsSendClientClose(int clientID, unsigned short status){
     wsClients[clientID]->ReadyState = status;
 
     // send close frame to client
-    // wsSendClientMessage(clientID, WS_OPCODE_CLOSE, "");
     unsigned char fin = WS_FIN;
     size_t bufferLength = 0;
     size_t totalLength = bufferLength + 2 + (bufferLength > 125 ? (bufferLength > 65535 ? 8 : 2) : 0);
@@ -615,10 +614,9 @@ void webSocket::startServer(int port)
     ev.data.fd = serverSocket;
     epoll_ctl(epfd, EPOLL_CTL_ADD, serverSocket, &ev);
 
-    int i;
+    int i, nfds, cfd;
     char buf[bfz];
-    int nfds;
-    int cfd;
+    time_t nextPingTime = time(NULL) + 1;
     for (;;)
     {
         // epoll
@@ -663,25 +661,30 @@ void webSocket::startServer(int port)
                 // handleClient(clientFd);
 
                 int nbytes = recv(clientFd, buf, sizeof(buf), 0);
-                        if (socketIDmap.find(clientFd) != socketIDmap.end()){
-                            if (nbytes < 0){
-                                wsSendClientClose(socketIDmap[clientFd], WS_STATUS_PROTOCOL_ERROR);
-                                close(clientFd);
-                            }else if (nbytes == 0){
-                                wsRemoveClient(socketIDmap[clientFd]);
-                                epoll_ctl(epfd, EPOLL_CTL_DEL, clientFd, NULL);
-                            }else {
-                                if (!wsProcessClient(socketIDmap[clientFd], buf, nbytes)){
-                                    wsSendClientClose(socketIDmap[clientFd], WS_STATUS_PROTOCOL_ERROR);
-                                    close(clientFd);
-                                }
-                            }
+                if (socketIDmap.find(clientFd) != socketIDmap.end()){
+                    if (nbytes < 0){
+                        wsSendClientClose(socketIDmap[clientFd], WS_STATUS_PROTOCOL_ERROR);
+                        close(clientFd);
+                    }else if (nbytes == 0){
+                        wsRemoveClient(socketIDmap[clientFd]);
+                        epoll_ctl(epfd, EPOLL_CTL_DEL, clientFd, NULL);
+                    }else {
+                        if (!wsProcessClient(socketIDmap[clientFd], buf, nbytes)){
+                            wsSendClientClose(socketIDmap[clientFd], WS_STATUS_PROTOCOL_ERROR);
+                            close(clientFd);
                         }
+                    }
+                }
             }
         }
+    if (time(NULL) >= nextPingTime){
+            wsCheckIdleClients();
+            nextPingTime = time(NULL) + 1;
+        }
 
+        if (callPeriodic != NULL)
+            callPeriodic();
     }
-
 }
 
 void webSocket::stopServer(){
