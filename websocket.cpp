@@ -50,22 +50,23 @@ string webSocket::getClientIP(int clientID){
     return string(inet_ntoa(wsClients[clientID]->addr));
 }
 
-void webSocket::wsCheckIdleClients(){
+void webSocket::wsCheckIdleClients() {
+    cout<<"checkIdleClient"<<endl;
     time_t current = time(NULL);
-    for (int i = 0; i < wsClients.size(); i++){
-        if (wsClients[i] != NULL && wsClients[i]->ReadyState != WS_READY_STATE_CLOSED){
-            if (wsClients[i]->PingSentTime != 0){
-                if (difftime(current, wsClients[i]->PingSentTime) >= WS_TIMEOUT_PONG){
+    for (int i = 0; i < wsClients.size(); i++) {
+        if (wsClients[i] != NULL && wsClients[i]->ReadyState != WS_READY_STATE_CLOSED) {
+            if (wsClients[i]->PingSentTime != 0) {
+                if (difftime(current, wsClients[i]->PingSentTime) >= WS_TIMEOUT_PONG) {
                     wsSendClientClose(i, WS_STATUS_TIMEOUT);
                     wsRemoveClient(i);
                 }
-            }
-            else if (difftime(current, wsClients[i]->LastRecvTime) != WS_TIMEOUT_RECV){
+            } else if (difftime(current, wsClients[i]->LastRecvTime) >= WS_TIMEOUT_RECV) {
+                cout<<"client ready state: "<<static_cast<int>(wsClients[i]->ReadyState)<<endl;
                 if (wsClients[i]->ReadyState != WS_READY_STATE_CONNECTING) {
                     wsClients[i]->PingSentTime = time(NULL);
+                    cout<<"entered wsReadyStateOpen"<<endl;
                     wsSendClientMessage(i, WS_OPCODE_PING, "");
-                }
-                else
+                } else
                     wsRemoveClient(i);
             }
         }
@@ -285,6 +286,13 @@ bool webSocket::wsProcessClientFrame(int clientID){
 
     unsigned char fin = octet0 & WS_FIN;
     unsigned char opcode = octet0 & 0x0f;
+    cout << "Received opcode: " << static_cast<int>(opcode) << endl;
+
+// Check if the opcode represents a Pong frame
+if (opcode == WS_OPCODE_PONG) {
+    cout << "Received a Pong frame." << endl;
+}
+
 
     //unsigned char mask = octet1 & WS_MASK;
     if (octet1 < 128)
@@ -616,7 +624,7 @@ void webSocket::startServer(int port)
 
     int i, nfds, cfd;
     char buf[bfz];
-    time_t nextPingTime = time(NULL) + 1;
+    time_t nextPingTime = time(NULL) + 10;
     for (;;)
     {
         // epoll
@@ -677,13 +685,12 @@ void webSocket::startServer(int port)
                 }
             }
         }
-    if (time(NULL) >= nextPingTime){
-            wsCheckIdleClients();
-            nextPingTime = time(NULL) + 1;
-        }
-
-        if (callPeriodic != NULL)
-            callPeriodic();
+        // if (time(NULL) >= nextPingTime){
+        //     wsCheckIdleClients();
+        //     nextPingTime = time(NULL) + 1;
+        // }
+        // if (callPeriodic != NULL)
+        //     callPeriodic();
     }
 }
 
